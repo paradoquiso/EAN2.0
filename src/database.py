@@ -22,7 +22,7 @@ def init_db(app):
         db.create_all()
         
         # Verificar se já existe um admin
-        admin = Usuario.query.filter_by(admin=True).first()
+        admin = Usuario.query.filter_by(admin=1).first()
         if not admin:
             # Criar um usuário admin padrão
             from werkzeug.security import generate_password_hash
