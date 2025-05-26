@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: sistema-cadastro-ean
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --chdir src 'main:app' --log-file -
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        value: postgresql://data_base_ean_user:8iqHYjWBXBeCVEOxCVUcEcfOoLmbQWA4@dpg-d0qbpsh5pdvs73afm3ag-a.oregon-postgres.render.com/data_base_ean
