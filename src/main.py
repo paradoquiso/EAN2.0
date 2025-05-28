@@ -56,17 +56,20 @@ def carregar_produtos_usuario(usuario_id, apenas_nao_enviados=False):
     return [produto.to_dict() for produto in produtos]
 
 def carregar_todas_listas_enviadas():
+    # Criar o alias para a tabela de validador apenas uma vez
+    ValidadorAlias = db.aliased(Usuario, name='validador_alias')
+    
     # Buscar produtos enviados junto com o nome do usuário e do validador (se houver)
     produtos = db.session.query(
         Produto, 
         Usuario.nome.label('nome_usuario'),
-        db.func.coalesce(db.aliased(Usuario, name='validador').nome, '').label('nome_validador')
+        db.func.coalesce(ValidadorAlias.nome, '').label('nome_validador')
     ).join(
         Usuario, Produto.usuario_id == Usuario.id
     ).outerjoin(
-        db.aliased(Usuario, name='validador'), Produto.validador_id == db.aliased(Usuario, name='validador').id
+        ValidadorAlias, Produto.validador_id == ValidadorAlias.id
     ).filter(
-        Produto.enviado == 1  # Aqui está a correção: usar 1 em vez de true
+        Produto.enviado == 1  # Usar 1 em vez de true
     ).order_by(
         Produto.data_envio.desc()
     ).all()
@@ -82,17 +85,20 @@ def carregar_todas_listas_enviadas():
     return resultado
 
 def pesquisar_produtos(termo_pesquisa):
+    # Criar o alias para a tabela de validador apenas uma vez
+    ValidadorAlias = db.aliased(Usuario, name='validador_alias')
+    
     # Buscar produtos que correspondem ao termo de pesquisa (EAN ou palavra na descrição)
     produtos = db.session.query(
         Produto, 
         Usuario.nome.label('nome_usuario'),
-        db.func.coalesce(db.aliased(Usuario, name='validador').nome, '').label('nome_validador')
+        db.func.coalesce(ValidadorAlias.nome, '').label('nome_validador')
     ).join(
         Usuario, Produto.usuario_id == Usuario.id
     ).outerjoin(
-        db.aliased(Usuario, name='validador'), Produto.validador_id == db.aliased(Usuario, name='validador').id
+        ValidadorAlias, Produto.validador_id == ValidadorAlias.id
     ).filter(
-        Produto.enviado == 1,  # Aqui está a correção: usar 1 em vez de true
+        Produto.enviado == 1,  # Usar 1 em vez de true
         db.or_(
             Produto.ean.ilike(f'%{termo_pesquisa}%'),
             Produto.nome.ilike(f'%{termo_pesquisa}%'),
@@ -117,7 +123,7 @@ def buscar_produto_local(ean, usuario_id):
     produto = Produto.query.filter_by(
         ean=ean,
         usuario_id=usuario_id,
-        enviado=0  # Aqui está a correção: usar 0 em vez de false
+        enviado=0  # Usar 0 em vez de false
     ).first()
     
     if produto:
@@ -129,7 +135,7 @@ def salvar_produto(produto, usuario_id):
     produto_existente = Produto.query.filter_by(
         ean=produto['ean'],
         usuario_id=usuario_id,
-        enviado=0  # Aqui está a correção: usar 0 em vez de false
+        enviado=0  # Usar 0 em vez de false
     ).first()
     
     try:
@@ -148,7 +154,7 @@ def salvar_produto(produto, usuario_id):
                 quantidade=produto['quantidade'],
                 usuario_id=usuario_id,
                 timestamp=produto['timestamp'],
-                enviado=0  # Aqui está a correção: usar 0 em vez de false
+                enviado=0  # Usar 0 em vez de false
             )
             db.session.add(novo_produto)
         
@@ -164,11 +170,11 @@ def enviar_lista_produtos(usuario_id):
     # Marcar todos os produtos não enviados como enviados
     produtos = Produto.query.filter_by(
         usuario_id=usuario_id,
-        enviado=0  # Aqui está a correção: usar 0 em vez de false
+        enviado=0  # Usar 0 em vez de false
     ).all()
     
     for produto in produtos:
-        produto.enviado = 1  # Aqui está a correção: usar 1 em vez de true
+        produto.enviado = 1  # Usar 1 em vez de true
         produto.data_envio = data_envio
     
     db.session.commit()
@@ -187,11 +193,11 @@ def validar_lista(data_envio, nome_usuario, validador_id):
     produtos = Produto.query.filter_by(
         usuario_id=usuario_id,
         data_envio=data_envio,
-        enviado=1  # Aqui está a correção: usar 1 em vez de true
+        enviado=1  # Usar 1 em vez de true
     ).all()
     
     for produto in produtos:
-        produto.validado = 1  # Aqui está a correção: usar 1 em vez de true
+        produto.validado = 1  # Usar 1 em vez de true
         produto.validador_id = validador_id
         produto.data_validacao = data_validacao
     
@@ -202,7 +208,7 @@ def excluir_produto(produto_id, usuario_id):
     produto = Produto.query.filter_by(
         id=produto_id,
         usuario_id=usuario_id,
-        enviado=0  # Aqui está a correção: usar 0 em vez de false
+        enviado=0  # Usar 0 em vez de false
     ).first()
     
     if produto:
