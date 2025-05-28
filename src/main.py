@@ -59,19 +59,21 @@ def carregar_produtos_usuario(usuario_id, apenas_nao_enviados=False):
     return [produto.to_dict() for produto in produtos]
 
 def carregar_todas_listas_enviadas():
-    # Buscar produtos enviados junto com o nome do usuário e do validador (se houver)
-    produtos = db.session.query(
-        Produto, 
-        Usuario.nome.label('nome_usuario'),
-        db.func.coalesce(db.aliased(Usuario, name='validador').nome, '').label('nome_validador')
+    # Criamos um alias para a tabela Usuarios que será usado como validador
+    Validador = aliased(Usuarios)
+    
+    return db.session.query(
+        Produtos,
+        Usuarios.nome.label('nome_usuario'),
+        func.coalesce(Validador.nome, '').label('nome_validador')
     ).join(
-        Usuario, Produto.usuario_id == Usuario.id
+        Usuarios, Produtos.usuario_id == Usuarios.id
     ).outerjoin(
-        db.aliased(Usuario, name='validador'), Produto.validador_id == db.aliased(Usuario, name='validador').id
+        Validador, Produtos.validador_id == Validador.id  # Usando o alias criado anteriormente
     ).filter(
-        Produto.enviado == 1
+        Produtos.enviado == True
     ).order_by(
-        Produto.data_envio.desc()
+        Produtos.data_envio.desc()
     ).all()
     
     # Converter para dicionário
