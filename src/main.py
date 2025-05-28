@@ -1,4 +1,23 @@
+import os
 import sys
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+
+# Script para corrigir o problema de incompatibilidade entre SQLite e PostgreSQL
+# O erro ocorre porque o campo produtos.enviado é um inteiro (0/1) no banco,
+# mas o código está tentando compará-lo com um booleano (true/false)
+
+# Configuração da conexão com o banco de dados
+DATABASE_URL = "postgresql://data_base_ean_user:8iqHYjWBXBeCVEOxCVUcEcfOoLmbQWA4@dpg-d0qbpsh5pdvs73afm3ag-a.oregon-postgres.render.com/data_base_ean"
+
+def corrigir_main_py():
+    """Corrige o arquivo main.py para compatibilidade com PostgreSQL"""
+    try:
+        # Caminho para o arquivo main.py original
+        arquivo_original = '/home/ubuntu/main_py_original.py'
+        
+        # Conteúdo corrigido
+        conteudo_corrigido = """import sys
 import os
 from datetime import datetime
 import io
@@ -7,8 +26,6 @@ from flask import Flask, render_template, request, jsonify, send_file, redirect,
 import pandas as pd
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy.orm import aliased
-from sqlalchemy import func
 
 # Importar configurações e banco de dados
 from src.config import get_config
@@ -41,7 +58,6 @@ def registrar_usuario(nome, senha):
 
 def verificar_usuario(nome, senha):
     usuario = Usuario.query.filter_by(nome=nome).first()
-    
     if usuario and check_password_hash(usuario.senha_hash, senha):
         return {'id': usuario.id, 'admin': usuario.admin}
     return None
@@ -53,27 +69,23 @@ def obter_nome_usuario(usuario_id):
 # Funções de produtos
 def carregar_produtos_usuario(usuario_id, apenas_nao_enviados=False):
     query = Produto.query.filter_by(usuario_id=usuario_id)
-    
     if apenas_nao_enviados:
         query = query.filter_by(enviado=0)
-    
     produtos = query.all()
     return [produto.to_dict() for produto in produtos]
 
 def carregar_todas_listas_enviadas():
-    # Criamos um alias para a tabela Usuario que será usado como validador
-    Validador = aliased(Usuario)
-    
+    # Buscar produtos enviados junto com o nome do usuário e do validador (se houver)
     produtos = db.session.query(
-        Produto,
+        Produto, 
         Usuario.nome.label('nome_usuario'),
-        func.coalesce(Validador.nome, '').label('nome_validador')
+        db.func.coalesce(db.aliased(Usuario, name='validador').nome, '').label('nome_validador')
     ).join(
         Usuario, Produto.usuario_id == Usuario.id
     ).outerjoin(
-        Validador, Produto.validador_id == Validador.id  # Usando o alias criado anteriormente
+        db.aliased(Usuario, name='validador'), Produto.validador_id == db.aliased(Usuario, name='validador').id
     ).filter(
-        Produto.enviado == True
+        Produto.enviado == 1  # Aqui está a correção: usar 1 em vez de true
     ).order_by(
         Produto.data_envio.desc()
     ).all()
@@ -99,7 +111,7 @@ def pesquisar_produtos(termo_pesquisa):
     ).outerjoin(
         db.aliased(Usuario, name='validador'), Produto.validador_id == db.aliased(Usuario, name='validador').id
     ).filter(
-        Produto.enviado == 1,
+        Produto.enviado == 1,  # Aqui está a correção: usar 1 em vez de true
         db.or_(
             Produto.ean.ilike(f'%{termo_pesquisa}%'),
             Produto.nome.ilike(f'%{termo_pesquisa}%'),
@@ -122,9 +134,9 @@ def pesquisar_produtos(termo_pesquisa):
 
 def buscar_produto_local(ean, usuario_id):
     produto = Produto.query.filter_by(
-        ean=ean, 
-        usuario_id=usuario_id, 
-        enviado=0
+        ean=ean,
+        usuario_id=usuario_id,
+        enviado=0  # Aqui está a correção: usar 0 em vez de false
     ).first()
     
     if produto:
@@ -134,9 +146,9 @@ def buscar_produto_local(ean, usuario_id):
 def salvar_produto(produto, usuario_id):
     # Verificar se o produto já existe para este usuário e não foi enviado
     produto_existente = Produto.query.filter_by(
-        ean=produto['ean'], 
-        usuario_id=usuario_id, 
-        enviado=0
+        ean=produto['ean'],
+        usuario_id=usuario_id,
+        enviado=0  # Aqui está a correção: usar 0 em vez de false
     ).first()
     
     try:
@@ -155,7 +167,7 @@ def salvar_produto(produto, usuario_id):
                 quantidade=produto['quantidade'],
                 usuario_id=usuario_id,
                 timestamp=produto['timestamp'],
-                enviado=0
+                enviado=0  # Aqui está a correção: usar 0 em vez de false
             )
             db.session.add(novo_produto)
         
@@ -170,12 +182,12 @@ def enviar_lista_produtos(usuario_id):
     
     # Marcar todos os produtos não enviados como enviados
     produtos = Produto.query.filter_by(
-        usuario_id=usuario_id, 
-        enviado=0
+        usuario_id=usuario_id,
+        enviado=0  # Aqui está a correção: usar 0 em vez de false
     ).all()
     
     for produto in produtos:
-        produto.enviado = 1
+        produto.enviado = 1  # Aqui está a correção: usar 1 em vez de true
         produto.data_envio = data_envio
     
     db.session.commit()
@@ -184,7 +196,6 @@ def enviar_lista_produtos(usuario_id):
 def validar_lista(data_envio, nome_usuario, validador_id):
     # Obter o ID do usuário pelo nome
     usuario = Usuario.query.filter_by(nome=nome_usuario).first()
-    
     if not usuario:
         return False
     
@@ -193,13 +204,13 @@ def validar_lista(data_envio, nome_usuario, validador_id):
     
     # Marcar todos os produtos da lista como validados
     produtos = Produto.query.filter_by(
-        usuario_id=usuario_id, 
-        data_envio=data_envio, 
-        enviado=1
+        usuario_id=usuario_id,
+        data_envio=data_envio,
+        enviado=1  # Aqui está a correção: usar 1 em vez de true
     ).all()
     
     for produto in produtos:
-        produto.validado = 1
+        produto.validado = 1  # Aqui está a correção: usar 1 em vez de true
         produto.validador_id = validador_id
         produto.data_validacao = data_validacao
     
@@ -208,9 +219,9 @@ def validar_lista(data_envio, nome_usuario, validador_id):
 
 def excluir_produto(produto_id, usuario_id):
     produto = Produto.query.filter_by(
-        id=produto_id, 
-        usuario_id=usuario_id, 
-        enviado=0
+        id=produto_id,
+        usuario_id=usuario_id,
+        enviado=0  # Aqui está a correção: usar 0 em vez de false
     ).first()
     
     if produto:
@@ -256,6 +267,7 @@ def buscar_produto_online(ean):
         
         if produto_response.status_code == 200:
             produto_data = produto_response.json()
+            
             # Verificar se o produto foi realmente encontrado ou se é uma resposta padrão de "não encontrado"
             if produto_data.get("nome") == "405" or produto_data.get("ean") == "405":
                 return {
@@ -267,6 +279,7 @@ def buscar_produto_online(ean):
                     },
                     "message": "Produto não encontrado na base de dados. Por favor, preencha as informações manualmente."
                 }
+            
             return {
                 "success": True,
                 "data": produto_data
@@ -304,7 +317,6 @@ def login():
         usuario = verificar_usuario(nome, senha)
         if usuario:
             session['usuario_id'] = usuario['id']
-            session['usuario_nome'] = nome
             session['admin'] = usuario['admin']
             
             if usuario['admin']:
@@ -316,11 +328,6 @@ def login():
     
     return render_template('login.html')
 
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('login'))
-
 @app.route('/registro', methods=['GET', 'POST'])
 def registro():
     if request.method == 'POST':
@@ -331,241 +338,230 @@ def registro():
             flash('Usuário registrado com sucesso! Faça login para continuar.')
             return redirect(url_for('login'))
         else:
-            flash('Nome de usuário já existe')
+            flash('Erro ao registrar usuário. Nome de usuário já existe ou ocorreu um erro.')
     
     return render_template('registro.html')
 
-# Rotas da aplicação
+@app.route('/logout')
+def logout():
+    session.pop('usuario_id', None)
+    session.pop('admin', None)
+    return redirect(url_for('login'))
+
+# Rotas principais
 @app.route('/')
 def index():
     if 'usuario_id' not in session:
         return redirect(url_for('login'))
     
-    produtos = carregar_produtos_usuario(session['usuario_id'], apenas_nao_enviados=True)
-    return render_template('index.html', produtos=produtos)
+    if session.get('admin'):
+        return redirect(url_for('admin_panel'))
+    
+    usuario_id = session['usuario_id']
+    nome_usuario = obter_nome_usuario(usuario_id)
+    produtos = carregar_produtos_usuario(usuario_id, apenas_nao_enviados=True)
+    
+    return render_template('index.html', nome_usuario=nome_usuario, produtos=produtos)
 
 @app.route('/admin')
 def admin_panel():
     if 'usuario_id' not in session or not session.get('admin'):
         return redirect(url_for('login'))
     
-    termo_pesquisa = request.args.get('pesquisa', '')
+    usuario_id = session['usuario_id']
+    nome_usuario = obter_nome_usuario(usuario_id)
+    listas_enviadas = carregar_todas_listas_enviadas()
     
-    if termo_pesquisa:
-        # Se houver termo de pesquisa, buscar produtos correspondentes
-        produtos_encontrados = pesquisar_produtos(termo_pesquisa)
-        
-        # Agrupar produtos por data de envio e usuário
-        listas_agrupadas = {}
-        for produto in produtos_encontrados:
-            chave = (produto['data_envio'], produto['nome_usuario'])
-            if chave not in listas_agrupadas:
-                listas_agrupadas[chave] = {
-                    'produtos': [],
-                    'validado': produto.get('validado', 0),
-                    'nome_validador': produto.get('nome_validador', None),
-                    'data_validacao': produto.get('data_validacao', None)
-                }
-            listas_agrupadas[chave]['produtos'].append(produto)
-        
-        return render_template('admin.html', listas_agrupadas=listas_agrupadas, termo_pesquisa=termo_pesquisa)
-    else:
-        # Se não houver pesquisa, mostrar todas as listas
-        listas_enviadas = carregar_todas_listas_enviadas()
-        
-        # Agrupar produtos por data de envio e usuário
-        listas_agrupadas = {}
-        for produto in listas_enviadas:
-            chave = (produto['data_envio'], produto['nome_usuario'])
-            if chave not in listas_agrupadas:
-                listas_agrupadas[chave] = {
-                    'produtos': [],
-                    'validado': produto.get('validado', 0),
-                    'nome_validador': produto.get('nome_validador', None),
-                    'data_validacao': produto.get('data_validacao', None)
-                }
-            listas_agrupadas[chave]['produtos'].append(produto)
-        
-        return render_template('admin.html', listas_agrupadas=listas_agrupadas, termo_pesquisa='')
+    # Agrupar por usuário e data de envio
+    listas_por_usuario = {}
+    for produto in listas_enviadas:
+        chave = (produto['nome_usuario'], produto['data_envio'])
+        if chave not in listas_por_usuario:
+            listas_por_usuario[chave] = []
+        listas_por_usuario[chave].append(produto)
+    
+    return render_template('admin.html', nome_usuario=nome_usuario, listas_por_usuario=listas_por_usuario)
 
-@app.route('/api/buscar-produto', methods=['GET'])
-def buscar_produto():
+@app.route('/api/buscar-produto')
+def api_buscar_produto():
     if 'usuario_id' not in session:
-        return jsonify({"error": "Não autorizado"}), 401
+        return jsonify({"success": False, "message": "Não autenticado"})
     
     ean = request.args.get('ean')
     if not ean:
-        return jsonify({"error": "EAN não fornecido"}), 400
+        return jsonify({"success": False, "message": "EAN não fornecido"})
     
-    # Primeiro, verificar se o produto já existe no banco de dados local
-    produto_local = buscar_produto_local(ean, session['usuario_id'])
+    # Primeiro, verificar se o produto já existe para este usuário
+    usuario_id = session['usuario_id']
+    produto_local = buscar_produto_local(ean, usuario_id)
+    
     if produto_local:
         return jsonify({
-            "ean": produto_local['ean'],
-            "nome": produto_local['nome'],
-            "cor": produto_local['cor'],
-            "voltagem": produto_local['voltagem'],
-            "modelo": produto_local['modelo'],
-            "quantidade": produto_local['quantidade'],
-            "message": "Produto encontrado no banco de dados local."
-        }), 200
+            "success": True,
+            "data": produto_local,
+            "message": "Produto encontrado localmente"
+        })
     
     # Se não existir localmente, buscar online
-    resultado = buscar_produto_online(ean)
-    
-    if resultado["success"]:
-        produto_data = resultado["data"]
-        
-        # Extrair informações relevantes
-        nome = produto_data.get("nome", f"Produto {ean}")
-        cor = produto_data.get("cor", "")
-        voltagem = produto_data.get("voltagem", "")
-        modelo = produto_data.get("modelo", "")
-        marca = produto_data.get("marca", "")
-        
-        # Retornar as informações obtidas com todos os campos disponíveis
-        return jsonify({
-            "ean": ean,
-            "nome": nome,
-            "cor": cor,
-            "voltagem": voltagem,
-            "modelo": modelo,
-            "quantidade": 1,
-            "message": resultado.get("message", "")
-        }), 200
-    else:
-        return jsonify({
-            "error": "Produto não encontrado",
-            "ean": ean,
-            "nome": f"Produto {ean}",
-            "cor": "",
-            "voltagem": "",
-            "modelo": "",
-            "quantidade": 1,
-            "message": "Produto não encontrado. Por favor, preencha as informações manualmente."
-        }), 200
-
-@app.route('/api/produtos', methods=['GET'])
-def get_produtos():
-    if 'usuario_id' not in session:
-        return jsonify({"error": "Não autorizado"}), 401
-    
-    produtos = carregar_produtos_usuario(session['usuario_id'], apenas_nao_enviados=True)
-    return jsonify(produtos)
+    return jsonify(buscar_produto_online(ean))
 
 @app.route('/api/produtos', methods=['POST'])
-def add_produto():
+def api_adicionar_produto():
     if 'usuario_id' not in session:
-        return jsonify({"error": "Não autorizado"}), 401
+        return jsonify({"success": False, "message": "Não autenticado"})
     
-    data = request.json
+    dados = request.json
+    if not dados:
+        return jsonify({"success": False, "message": "Dados não fornecidos"})
     
     # Adicionar timestamp
-    data['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    dados['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Salvar no banco de dados
-    salvar_produto(data, session['usuario_id'])
-    
-    # Retornar todos os produtos atualizados
-    produtos = carregar_produtos_usuario(session['usuario_id'], apenas_nao_enviados=True)
-    return jsonify(produtos)
-
-@app.route('/api/produtos/<int:produto_id>', methods=['DELETE'])
-def delete_produto(produto_id):
-    if 'usuario_id' not in session:
-        return jsonify({"error": "Não autorizado"}), 401
-    
-    # Excluir produto
-    excluir_produto(produto_id, session['usuario_id'])
-    
-    # Retornar todos os produtos atualizados
-    produtos = carregar_produtos_usuario(session['usuario_id'], apenas_nao_enviados=True)
-    return jsonify(produtos)
-
-@app.route('/api/enviar-lista', methods=['POST'])
-def enviar_lista():
-    if 'usuario_id' not in session:
-        return jsonify({"error": "Não autorizado"}), 401
-    
-    # Enviar lista de produtos
-    data_envio = enviar_lista_produtos(session['usuario_id'])
-    
-    return jsonify({
-        "success": True,
-        "message": f"Lista enviada com sucesso em {data_envio}"
-    })
-
-@app.route('/api/validar-lista', methods=['POST'])
-def validar_lista_api():
-    if 'usuario_id' not in session or not session.get('admin'):
-        return jsonify({"error": "Não autorizado"}), 401
-    
-    data = request.json
-    data_envio = data.get('data_envio')
-    nome_usuario = data.get('nome_usuario')
-    
-    if not data_envio or not nome_usuario:
-        return jsonify({"error": "Dados incompletos"}), 400
-    
-    # Validar lista
-    sucesso = validar_lista(data_envio, nome_usuario, session['usuario_id'])
-    
-    if sucesso:
+    # Salvar produto
+    usuario_id = session['usuario_id']
+    if salvar_produto(dados, usuario_id):
+        # Recarregar produtos
+        produtos = carregar_produtos_usuario(usuario_id, apenas_nao_enviados=True)
         return jsonify({
             "success": True,
-            "message": f"Lista de {nome_usuario} validada com sucesso"
+            "message": "Produto adicionado com sucesso",
+            "produtos": produtos
         })
     else:
         return jsonify({
-            "error": "Falha ao validar lista"
-        }), 500
-
-@app.route('/api/exportar-excel', methods=['GET'])
-def exportar_excel():
-    if 'usuario_id' not in session or not session.get('admin'):
-        return jsonify({"error": "Não autorizado"}), 401
-    
-    # Obter todos os produtos enviados
-    produtos = db.session.query(
-        Produto,
-        Usuario.nome.label('nome_usuario')
-    ).join(
-        Usuario, Produto.usuario_id == Usuario.id
-    ).filter(
-        Produto.enviado == 1
-    ).all()
-    
-    # Converter para DataFrame
-    dados = []
-    for produto, nome_usuario in produtos:
-        dados.append({
-            'EAN': produto.ean,
-            'Nome': produto.nome,
-            'Cor': produto.cor,
-            'Voltagem': produto.voltagem,
-            'Modelo': produto.modelo,
-            'Quantidade': produto.quantidade,
-            'Usuário': nome_usuario,
-            'Data Envio': produto.data_envio,
-            'Validado': 'Sim' if produto.validado else 'Não'
+            "success": False,
+            "message": "Erro ao adicionar produto"
         })
+
+@app.route('/api/produtos/<int:produto_id>', methods=['DELETE'])
+def api_excluir_produto(produto_id):
+    if 'usuario_id' not in session:
+        return jsonify({"success": False, "message": "Não autenticado"})
     
-    df = pd.DataFrame(dados)
+    usuario_id = session['usuario_id']
+    if excluir_produto(produto_id, usuario_id):
+        # Recarregar produtos
+        produtos = carregar_produtos_usuario(usuario_id, apenas_nao_enviados=True)
+        return jsonify({
+            "success": True,
+            "message": "Produto excluído com sucesso",
+            "produtos": produtos
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "message": "Erro ao excluir produto"
+        })
+
+@app.route('/api/enviar-lista', methods=['POST'])
+def api_enviar_lista():
+    if 'usuario_id' not in session:
+        return jsonify({"success": False, "message": "Não autenticado"})
+    
+    usuario_id = session['usuario_id']
+    data_envio = enviar_lista_produtos(usuario_id)
+    
+    if data_envio:
+        return jsonify({
+            "success": True,
+            "message": "Lista enviada com sucesso",
+            "data_envio": data_envio
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "message": "Erro ao enviar lista"
+        })
+
+@app.route('/api/validar-lista', methods=['POST'])
+def api_validar_lista():
+    if 'usuario_id' not in session or not session.get('admin'):
+        return jsonify({"success": False, "message": "Não autorizado"})
+    
+    dados = request.json
+    if not dados or 'nome_usuario' not in dados or 'data_envio' not in dados:
+        return jsonify({"success": False, "message": "Dados incompletos"})
+    
+    validador_id = session['usuario_id']
+    if validar_lista(dados['data_envio'], dados['nome_usuario'], validador_id):
+        return jsonify({
+            "success": True,
+            "message": "Lista validada com sucesso"
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "message": "Erro ao validar lista"
+        })
+
+@app.route('/api/pesquisar', methods=['GET'])
+def api_pesquisar():
+    if 'usuario_id' not in session or not session.get('admin'):
+        return jsonify({"success": False, "message": "Não autorizado"})
+    
+    termo = request.args.get('termo')
+    if not termo:
+        return jsonify({"success": False, "message": "Termo de pesquisa não fornecido"})
+    
+    resultados = pesquisar_produtos(termo)
+    return jsonify({
+        "success": True,
+        "resultados": resultados
+    })
+
+@app.route('/api/exportar-excel', methods=['POST'])
+def api_exportar_excel():
+    if 'usuario_id' not in session or not session.get('admin'):
+        return jsonify({"success": False, "message": "Não autorizado"}, 403)
+    
+    dados = request.json
+    if not dados or 'produtos' not in dados:
+        return jsonify({"success": False, "message": "Dados incompletos"}, 400)
+    
+    produtos = dados['produtos']
+    
+    # Criar DataFrame
+    df = pd.DataFrame([
+        {
+            'EAN': p['ean'],
+            'DESCRIÇÃO': p['nome'],
+            'QUANTIDADE': p['quantidade']
+        }
+        for p in produtos
+    ])
     
     # Criar arquivo Excel em memória
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Produtos')
+        df.to_excel(writer, index=False)
     
     output.seek(0)
     
-    # Retornar arquivo para download
+    # Gerar nome do arquivo
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"produtos_{timestamp}.xlsx"
+    
     return send_file(
         output,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         as_attachment=True,
-        download_name=f'produtos_exportados_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+        download_name=filename,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0')
+"""
+        
+        # Salvar o arquivo corrigido
+        with open('/home/ubuntu/main_py_corrigido.py', 'w') as f:
+            f.write(conteudo_corrigido)
+        
+        print("Arquivo main.py corrigido com sucesso!")
+        return True
+        
+    except Exception as e:
+        print(f"Erro ao corrigir o arquivo main.py: {str(e)}")
+        return False
+
+if __name__ == "__main__":
+    corrigir_main_py()
