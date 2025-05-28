@@ -1,23 +1,4 @@
-import os
 import sys
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
-
-# Script para corrigir o problema de incompatibilidade entre SQLite e PostgreSQL
-# O erro ocorre porque o campo produtos.enviado é um inteiro (0/1) no banco,
-# mas o código está tentando compará-lo com um booleano (true/false)
-
-# Configuração da conexão com o banco de dados
-DATABASE_URL = "postgresql://data_base_ean_user:8iqHYjWBXBeCVEOxCVUcEcfOoLmbQWA4@dpg-d0qbpsh5pdvs73afm3ag-a.oregon-postgres.render.com/data_base_ean"
-
-def corrigir_main_py():
-    """Corrige o arquivo main.py para compatibilidade com PostgreSQL"""
-    try:
-        # Caminho para o arquivo main.py original
-        arquivo_original = '/home/ubuntu/main_py_original.py'
-        
-        # Conteúdo corrigido
-        conteudo_corrigido = """import sys
 import os
 from datetime import datetime
 import io
@@ -550,18 +531,3 @@ def api_exportar_excel():
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0')
-"""
-        
-        # Salvar o arquivo corrigido
-        with open('/home/ubuntu/main_py_corrigido.py', 'w') as f:
-            f.write(conteudo_corrigido)
-        
-        print("Arquivo main.py corrigido com sucesso!")
-        return True
-        
-    except Exception as e:
-        print(f"Erro ao corrigir o arquivo main.py: {str(e)}")
-        return False
-
-if __name__ == "__main__":
-    corrigir_main_py()
