@@ -7,6 +7,8 @@ from flask import Flask, render_template, request, jsonify, send_file, redirect,
 import pandas as pd
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy.orm import aliased
+from sqlalchemy import func
 
 # Importar configurações e banco de dados
 from src.config import get_config
@@ -59,21 +61,21 @@ def carregar_produtos_usuario(usuario_id, apenas_nao_enviados=False):
     return [produto.to_dict() for produto in produtos]
 
 def carregar_todas_listas_enviadas():
-    # Criamos um alias para a tabela Usuarios que será usado como validador
-    Validador = aliased(Usuarios)
+    # Criamos um alias para a tabela Usuario que será usado como validador
+    Validador = aliased(Usuario)
     
-    return db.session.query(
-        Produtos,
-        Usuarios.nome.label('nome_usuario'),
+    produtos = db.session.query(
+        Produto,
+        Usuario.nome.label('nome_usuario'),
         func.coalesce(Validador.nome, '').label('nome_validador')
     ).join(
-        Usuarios, Produtos.usuario_id == Usuarios.id
+        Usuario, Produto.usuario_id == Usuario.id
     ).outerjoin(
-        Validador, Produtos.validador_id == Validador.id  # Usando o alias criado anteriormente
+        Validador, Produto.validador_id == Validador.id  # Usando o alias criado anteriormente
     ).filter(
-        Produtos.enviado == True
+        Produto.enviado == True
     ).order_by(
-        Produtos.data_envio.desc()
+        Produto.data_envio.desc()
     ).all()
     
     # Converter para dicionário
@@ -464,28 +466,37 @@ def add_produto():
     # Salvar no banco de dados
     salvar_produto(data, session['usuario_id'])
     
-    # Retornar os produtos atualizados
+    # Retornar todos os produtos atualizados
     produtos = carregar_produtos_usuario(session['usuario_id'], apenas_nao_enviados=True)
-    return jsonify(produtos), 200
+    return jsonify(produtos)
 
 @app.route('/api/produtos/<int:produto_id>', methods=['DELETE'])
-def delete_produto_route(produto_id):
+def delete_produto(produto_id):
     if 'usuario_id' not in session:
         return jsonify({"error": "Não autorizado"}), 401
     
+    # Excluir produto
     excluir_produto(produto_id, session['usuario_id'])
-    return jsonify({"message": "Produto removido com sucesso"}), 200
+    
+    # Retornar todos os produtos atualizados
+    produtos = carregar_produtos_usuario(session['usuario_id'], apenas_nao_enviados=True)
+    return jsonify(produtos)
 
 @app.route('/api/enviar-lista', methods=['POST'])
 def enviar_lista():
     if 'usuario_id' not in session:
         return jsonify({"error": "Não autorizado"}), 401
     
+    # Enviar lista de produtos
     data_envio = enviar_lista_produtos(session['usuario_id'])
-    return jsonify({"message": "Lista enviada com sucesso", "data_envio": data_envio}), 200
+    
+    return jsonify({
+        "success": True,
+        "message": f"Lista enviada com sucesso em {data_envio}"
+    })
 
 @app.route('/api/validar-lista', methods=['POST'])
-def validar_lista_route():
+def validar_lista_api():
     if 'usuario_id' not in session or not session.get('admin'):
         return jsonify({"error": "Não autorizado"}), 401
     
@@ -496,48 +507,65 @@ def validar_lista_route():
     if not data_envio or not nome_usuario:
         return jsonify({"error": "Dados incompletos"}), 400
     
-    if validar_lista(data_envio, nome_usuario, session['usuario_id']):
-        return jsonify({"message": "Lista validada com sucesso", "validador": session['usuario_nome']}), 200
+    # Validar lista
+    sucesso = validar_lista(data_envio, nome_usuario, session['usuario_id'])
+    
+    if sucesso:
+        return jsonify({
+            "success": True,
+            "message": f"Lista de {nome_usuario} validada com sucesso"
+        })
     else:
-        return jsonify({"error": "Erro ao validar lista"}), 500
+        return jsonify({
+            "error": "Falha ao validar lista"
+        }), 500
 
-@app.route('/api/export', methods=['GET'])
-def export_excel():
-    if 'usuario_id' not in session:
+@app.route('/api/exportar-excel', methods=['GET'])
+def exportar_excel():
+    if 'usuario_id' not in session or not session.get('admin'):
         return jsonify({"error": "Não autorizado"}), 401
     
-    produtos = carregar_produtos_usuario(session['usuario_id'], apenas_nao_enviados=True)
+    # Obter todos os produtos enviados
+    produtos = db.session.query(
+        Produto,
+        Usuario.nome.label('nome_usuario')
+    ).join(
+        Usuario, Produto.usuario_id == Usuario.id
+    ).filter(
+        Produto.enviado == 1
+    ).all()
     
-    if not produtos:
-        return jsonify({"error": "Não há produtos para exportar"}), 400
+    # Converter para DataFrame
+    dados = []
+    for produto, nome_usuario in produtos:
+        dados.append({
+            'EAN': produto.ean,
+            'Nome': produto.nome,
+            'Cor': produto.cor,
+            'Voltagem': produto.voltagem,
+            'Modelo': produto.modelo,
+            'Quantidade': produto.quantidade,
+            'Usuário': nome_usuario,
+            'Data Envio': produto.data_envio,
+            'Validado': 'Sim' if produto.validado else 'Não'
+        })
     
-    # Criar DataFrame com os dados
-    df = pd.DataFrame(produtos)
+    df = pd.DataFrame(dados)
     
-    # Selecionar e renomear colunas conforme solicitado pelo usuário
-    df_export = df[['ean', 'nome', 'quantidade']].copy()
-    df_export.columns = ['EAN', 'DESCRIÇÃO', 'QUANTIDADE']
-    
-    # Criar buffer para o arquivo Excel
+    # Criar arquivo Excel em memória
     output = io.BytesIO()
-    
-    # Criar arquivo Excel
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_export.to_excel(writer, index=False, sheet_name='Produtos')
+        df.to_excel(writer, index=False, sheet_name='Produtos')
     
     output.seek(0)
     
-    # Gerar nome do arquivo com timestamp
-    filename = f"produtos_ean_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    
+    # Retornar arquivo para download
     return send_file(
-        output, 
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         as_attachment=True,
-        download_name=filename,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        download_name=f'produtos_exportados_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
     )
 
 if __name__ == '__main__':
-    # Porta padrão para o Render é definida pela variável de ambiente PORT
-    port = int(os.environ.get('PORT', 5010))
-    app.run(host='0.0.0.0', port=port)
+    app.run(debug=True)
