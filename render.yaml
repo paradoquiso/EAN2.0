@@ -2,7 +2,7 @@ services:
   - type: web
     name: sistema-cadastro-ean
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python criar_admin_manual.py
     startCommand: gunicorn --chdir src 'main:app' --log-file -
     envVars:
       - key: FLASK_ENV
