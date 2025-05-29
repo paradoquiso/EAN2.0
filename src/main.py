@@ -6,7 +6,12 @@ import requests
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session, flash
 import pandas as pd
 import json
+import logging
 from werkzeug.security import generate_password_hash, check_password_hash
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Importar configurações e banco de dados
 from src.config import get_config
@@ -223,7 +228,19 @@ def buscar_produto_online(ean):
         # Primeiro, tentamos buscar no Mercado Livre
         resultado_ml = buscar_produto_por_ean(ean)
         if resultado_ml and resultado_ml.get("success"):
-            return resultado_ml
+            # Extrair os dados do produto para o formato esperado pelo frontend
+            produto_data = resultado_ml.get("data", {})
+            
+            # Mapear os campos do resultado para o formato esperado pelo frontend
+            return {
+                "success": True,
+                "nome": produto_data.get("nome", f"Produto {ean}"),
+                "cor": produto_data.get("cor", ""),
+                "voltagem": produto_data.get("voltagem", ""),
+                "modelo": produto_data.get("modelo", ""),
+                "quantidade": 1,
+                "message": "Informações do produto carregadas com sucesso!"
+            }
         
         # Se não encontrar no Mercado Livre, tentamos a API alternativa
         token_url = "https://gtin.rscsistemas.com.br/oauth/token"
@@ -236,11 +253,11 @@ def buscar_produto_online(ean):
             # Se não conseguir autenticar, retornamos dados básicos para edição manual
             return {
                 "success": True,
-                "data": {
-                    "nome": f"Produto {ean}",
-                    "marca": "",
-                    "categoria": ""
-                },
+                "nome": f"Produto {ean}",
+                "cor": "",
+                "voltagem": "",
+                "modelo": "",
+                "quantidade": 1,
                 "message": "Produto não encontrado na base de dados. Por favor, preencha as informações manualmente."
             }
         
@@ -259,38 +276,44 @@ def buscar_produto_online(ean):
             if produto_data.get("nome") == "405" or produto_data.get("ean") == "405":
                 return {
                     "success": True,
-                    "data": {
-                        "nome": f"Produto {ean}",
-                        "marca": "",
-                        "categoria": ""
-                    },
+                    "nome": f"Produto {ean}",
+                    "cor": "",
+                    "voltagem": "",
+                    "modelo": "",
+                    "quantidade": 1,
                     "message": "Produto não encontrado na base de dados. Por favor, preencha as informações manualmente."
                 }
             
             return {
                 "success": True,
-                "data": produto_data
+                "nome": produto_data.get("nome", f"Produto {ean}"),
+                "cor": produto_data.get("cor", ""),
+                "voltagem": produto_data.get("voltagem", ""),
+                "modelo": produto_data.get("modelo", ""),
+                "quantidade": 1,
+                "message": "Informações do produto carregadas com sucesso!"
             }
         else:
             # Se não encontrar na API, retornamos dados básicos para edição manual
             return {
                 "success": True,
-                "data": {
-                    "nome": f"Produto {ean}",
-                    "marca": "",
-                    "categoria": ""
-                },
+                "nome": f"Produto {ean}",
+                "cor": "",
+                "voltagem": "",
+                "modelo": "",
+                "quantidade": 1,
                 "message": "Produto não encontrado na base de dados. Por favor, preencha as informações manualmente."
             }
     except Exception as e:
+        logger.error(f"Erro ao buscar produto: {str(e)}")
         # Em caso de erro, retornamos dados básicos para edição manual
         return {
             "success": True,
-            "data": {
-                "nome": f"Produto {ean}",
-                "marca": "",
-                "categoria": ""
-            },
+            "nome": f"Produto {ean}",
+            "cor": "",
+            "voltagem": "",
+            "modelo": "",
+            "quantidade": 1,
             "message": f"Erro ao buscar produto: {str(e)}. Por favor, preencha as informações manualmente."
         }
 
@@ -383,14 +406,21 @@ def api_buscar_produto():
     produto_local = buscar_produto_local(ean, usuario_id)
     
     if produto_local:
+        # Mapear os campos do produto local para o formato esperado pelo frontend
         return jsonify({
             "success": True,
-            "data": produto_local,
+            "nome": produto_local.get("nome", ""),
+            "cor": produto_local.get("cor", ""),
+            "voltagem": produto_local.get("voltagem", ""),
+            "modelo": produto_local.get("modelo", ""),
+            "quantidade": produto_local.get("quantidade", 1),
             "message": "Produto encontrado localmente"
         })
     
     # Se não existir localmente, buscar online
-    return jsonify(buscar_produto_online(ean))
+    resultado = buscar_produto_online(ean)
+    logger.info(f"Resultado da busca online: {resultado}")
+    return jsonify(resultado)
 
 @app.route('/api/produtos', methods=['POST'])
 def api_adicionar_produto():
