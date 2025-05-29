@@ -52,6 +52,14 @@
         .table th {
             background-color: #f8f9fa;
         }
+        .badge-responsavel {
+            background-color: #6c757d;
+            color: white;
+            padding: 3px 8px;
+            border-radius: 10px;
+            margin-left: 5px;
+            font-size: 0.8em;
+        }
     </style>
 </head>
 <body>
@@ -83,10 +91,12 @@
                 </form>
                 
                 {% if listas_por_usuario %}
-                    {% for (nome_usuario, data_envio), produtos in listas_por_usuario.items() %}
+                    {% for (nome_usuario, data_envio, responsavel_pi), produtos in listas_por_usuario.items() %}
                         <div class="card mb-4">
                             <div class="card-header">
-                                Lista enviada por {{ nome_usuario }} em {{ data_envio }}
+                                Lista enviada por {{ nome_usuario }} 
+                                <span class="badge-responsavel">Responsável: {{ responsavel_pi }}</span>
+                                em {{ data_envio }}
                             </div>
                             <div class="card-body">
                                 <table class="table table-striped">
@@ -127,6 +137,12 @@
                                             data-nome-usuario="{{ nome_usuario }}" 
                                             data-data-envio="{{ data_envio }}">
                                         Validar Lista
+                                    </button>
+                                    
+                                    <button class="btn btn-primary exportar-excel"
+                                            data-nome-usuario="{{ nome_usuario }}"
+                                            data-data-envio="{{ data_envio }}">
+                                        Exportar para Excel
                                     </button>
                                 {% endif %}
                             </div>
@@ -175,6 +191,40 @@
                     .catch(error => {
                         console.error('Erro:', error);
                         alert('Erro ao validar lista. Verifique o console para mais detalhes.');
+                    });
+                });
+            });
+            
+            // Adicionar evento de clique aos botões de exportação para Excel
+            const botoesExportar = document.querySelectorAll('.exportar-excel');
+            botoesExportar.forEach(botao => {
+                botao.addEventListener('click', function() {
+                    const nomeUsuario = this.getAttribute('data-nome-usuario');
+                    const dataEnvio = this.getAttribute('data-data-envio');
+                    
+                    // Enviar requisição para exportar a lista para Excel
+                    fetch('/api/exportar-excel', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            nome_usuario: nomeUsuario,
+                            data_envio: dataEnvio
+                        })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            // Redirecionar para download do arquivo
+                            window.location.href = '/download-excel/' + data.arquivo;
+                        } else {
+                            alert('Erro ao exportar lista: ' + data.message);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Erro:', error);
+                        alert('Erro ao exportar lista. Verifique o console para mais detalhes.');
                     });
                 });
             });
