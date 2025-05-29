@@ -164,232 +164,238 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            // Elementos do DOM
-            const productForm = document.getElementById('productForm');
-            const searchBtn = document.getElementById('searchBtn');
-            const exportBtn = document.getElementById('exportBtn');
-            const enviarListaBtn = document.getElementById('enviarListaBtn');
-            const productList = document.getElementById('productList');
-            
-            // Função para buscar produto por EAN
-            function buscarProdutoPorEAN(ean) {
-                if (!ean) {
-                    showNotification('Por favor, digite um EAN válido', 'danger');
-                    return;
+       // Correção do JavaScript para atualização da lista de produtos
+document.addEventListener('DOMContentLoaded', function() {
+    // Elementos do DOM
+    const productForm = document.getElementById('productForm');
+    const searchBtn = document.getElementById('searchBtn');
+    const exportBtn = document.getElementById('exportBtn');
+    const enviarListaBtn = document.getElementById('enviarListaBtn');
+    const productList = document.getElementById('productList');
+    
+    // Função para buscar produto por EAN
+    function buscarProdutoPorEAN(ean) {
+        if (!ean) {
+            showNotification('Por favor, digite um EAN válido', 'danger');
+            return;
+        }
+        
+        // Mostrar indicador de carregamento
+        showNotification('Buscando produto...', 'info');
+        
+        fetch(`/api/buscar-produto?ean=${ean}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success === false) {
+                    showNotification(data.message || 'Erro ao buscar produto', 'danger');
+                } else {
+                    document.getElementById('nome').value = data.nome || '';
+                    document.getElementById('cor').value = data.cor || '';
+                    document.getElementById('voltagem').value = data.voltagem || '';
+                    document.getElementById('modelo').value = data.modelo || '';
+                    document.getElementById('quantidade').value = data.quantidade || 1;
+                    
+                    if (data.message) {
+                        showNotification(data.message, 'info');
+                    } else {
+                        showNotification('Informações do produto carregadas com sucesso!', 'success');
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('Erro:', error);
+                showNotification('Erro ao buscar produto', 'danger');
+            });
+    }
+    
+    // Evento de clique no botão de busca
+    searchBtn.addEventListener('click', function() {
+        const ean = document.getElementById('ean').value.trim();
+        buscarProdutoPorEAN(ean);
+    });
+    
+    // Evento de pressionar Enter no campo EAN
+    document.getElementById('ean').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const ean = this.value.trim();
+            buscarProdutoPorEAN(ean);
+        }
+    });
+    
+    // Enviar formulário
+    productForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const produto = {
+            ean: document.getElementById('ean').value.trim(),
+            nome: document.getElementById('nome').value.trim(),
+            cor: document.getElementById('cor').value.trim(),
+            voltagem: document.getElementById('voltagem').value.trim(),
+            modelo: document.getElementById('modelo').value.trim(),
+            quantidade: parseInt(document.getElementById('quantidade').value)
+        };
+        
+        if (!produto.ean || !produto.nome || isNaN(produto.quantidade) || produto.quantidade < 1) {
+            showNotification('Por favor, preencha todos os campos obrigatórios', 'danger');
+            return;
+        }
+        
+        fetch('/api/produtos', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(produto)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success === false) {
+                showNotification(data.message || 'Erro ao adicionar produto', 'danger');
+            } else {
+                // Limpar formulário
+                productForm.reset();
+                document.getElementById('quantidade').value = 1;
+                
+                // Atualizar lista de produtos
+                // CORREÇÃO: Passar apenas a lista de produtos, não o objeto inteiro
+                if (data.produtos) {
+                    updateProductList(data.produtos);
                 }
                 
-                // Mostrar indicador de carregamento
-                showNotification('Buscando produto no Mercado Livre...', 'info');
-                
-                fetch(`/api/buscar-produto?ean=${ean}`)
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.error) {
-                            showNotification(data.error, 'danger');
-                        } else {
-                            document.getElementById('nome').value = data.nome || '';
-                            document.getElementById('cor').value = data.cor || '';
-                            document.getElementById('voltagem').value = data.voltagem || '';
-                            document.getElementById('modelo').value = data.modelo || '';
-                            document.getElementById('quantidade').value = data.quantidade || 1;
-                            
-                            if (data.message) {
-                                showNotification(data.message, 'info');
-                            } else {
-                                showNotification('Informações do produto carregadas com sucesso!', 'success');
-                            }
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Erro:', error);
-                        showNotification('Erro ao buscar produto', 'danger');
-                    });
+                showNotification('Produto adicionado com sucesso!', 'success');
             }
+        })
+        .catch(error => {
+            console.error('Erro:', error);
+            showNotification('Erro ao adicionar produto', 'danger');
+        });
+    });
+    
+    // Excluir produto
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('delete-btn')) {
+            const id = e.target.getAttribute('data-id');
             
-            // Evento de clique no botão de busca
-            searchBtn.addEventListener('click', function() {
-                const ean = document.getElementById('ean').value.trim();
-                buscarProdutoPorEAN(ean);
-            });
-            
-            // Evento de pressionar Enter no campo EAN
-            document.getElementById('ean').addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') {
-                    e.preventDefault(); // Prevenir o envio do formulário
-                    const ean = this.value.trim();
-                    buscarProdutoPorEAN(ean);
-                }
-            });
-            
-            // Adicionar produto
-            productForm.addEventListener('submit', function(e) {
-                e.preventDefault();
-                
-                const produto = {
-                    ean: document.getElementById('ean').value.trim(),
-                    nome: document.getElementById('nome').value.trim(),
-                    cor: document.getElementById('cor').value.trim(),
-                    voltagem: document.getElementById('voltagem').value.trim(),
-                    modelo: document.getElementById('modelo').value.trim(),
-                    quantidade: parseInt(document.getElementById('quantidade').value)
-                };
-                
-                if (!produto.ean || !produto.nome || isNaN(produto.quantidade) || produto.quantidade < 1) {
-                    showNotification('Por favor, preencha todos os campos obrigatórios', 'danger');
-                    return;
-                }
-                
-                fetch('/api/produtos', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(produto)
+            if (confirm('Tem certeza que deseja excluir este produto?')) {
+                fetch(`/api/produtos/${id}`, {
+                    method: 'DELETE'
                 })
                 .then(response => response.json())
                 .then(data => {
-                    if (data.error) {
-                        showNotification(data.error, 'danger');
+                    if (data.success === false) {
+                        showNotification(data.message || 'Erro ao remover produto', 'danger');
                     } else {
-                        // Limpar formulário
-                        productForm.reset();
-                        document.getElementById('quantidade').value = 1;
+                        // CORREÇÃO: Atualizar a lista completa em vez de apenas remover a linha
+                        if (data.produtos) {
+                            updateProductList(data.produtos);
+                        } else {
+                            // Remover linha da tabela como fallback
+                            const row = e.target.closest('tr');
+                            row.remove();
+                            
+                            // Verificar se a tabela está vazia
+                            if (productList.children.length === 0) {
+                                const emptyRow = document.createElement('tr');
+                                emptyRow.id = 'empty-row';
+                                emptyRow.innerHTML = '<td colspan="7" class="text-center">Nenhum produto cadastrado</td>';
+                                productList.appendChild(emptyRow);
+                            }
+                        }
                         
-                        // Atualizar lista de produtos
-                        updateProductList(data);
-                        
-                        showNotification('Produto adicionado com sucesso!', 'success');
+                        showNotification('Produto removido com sucesso!', 'success');
                     }
                 })
                 .catch(error => {
                     console.error('Erro:', error);
-                    showNotification('Erro ao adicionar produto', 'danger');
+                    showNotification('Erro ao remover produto', 'danger');
                 });
-            });
-            
-            // Excluir produto
-            document.addEventListener('click', function(e) {
-                if (e.target.classList.contains('delete-btn')) {
-                    const id = e.target.getAttribute('data-id');
-                    
-                    if (confirm('Tem certeza que deseja excluir este produto?')) {
-                        fetch(`/api/produtos/${id}`, {
-                            method: 'DELETE'
-                        })
-                        .then(response => response.json())
-                        .then(data => {
-                            if (data.error) {
-                                showNotification(data.error, 'danger');
-                            } else {
-                                // Remover linha da tabela
-                                const row = e.target.closest('tr');
-                                row.remove();
-                                
-                                // Verificar se a tabela está vazia
-                                if (productList.children.length === 0) {
-                                    const emptyRow = document.createElement('tr');
-                                    emptyRow.id = 'empty-row';
-                                    emptyRow.innerHTML = '<td colspan="7" class="text-center">Nenhum produto cadastrado</td>';
-                                    productList.appendChild(emptyRow);
-                                }
-                                
-                                showNotification('Produto removido com sucesso!', 'success');
-                            }
-                        })
-                        .catch(error => {
-                            console.error('Erro:', error);
-                            showNotification('Erro ao remover produto', 'danger');
-                        });
-                    }
-                }
-            });
-            
-            // Exportar para Excel
-            exportBtn.addEventListener('click', function() {
-                window.location.href = '/api/export';
-            });
-            
-            // Enviar lista para o painel central
-            enviarListaBtn.addEventListener('click', function() {
-                // Verificar se há produtos na lista
-                if (document.getElementById('empty-row')) {
-                    showNotification('Não há produtos para enviar', 'warning');
-                    return;
-                }
-                
-                if (confirm('Tem certeza que deseja enviar esta lista para o painel central? Após o envio, não será possível editar.')) {
-                    fetch('/api/enviar-lista', {
-                        method: 'POST'
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.error) {
-                            showNotification(data.error, 'danger');
-                        } else {
-                            // Limpar a tabela
-                            productList.innerHTML = '';
-                            const emptyRow = document.createElement('tr');
-                            emptyRow.id = 'empty-row';
-                            emptyRow.innerHTML = '<td colspan="7" class="text-center">Nenhum produto cadastrado</td>';
-                            productList.appendChild(emptyRow);
-                            
-                            showNotification('Lista enviada com sucesso para o painel central!', 'success');
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Erro:', error);
-                        showNotification('Erro ao enviar lista', 'danger');
-                    });
-                }
-            });
-            
-            // Funções auxiliares
-            function updateProductList(produtos) {
-                // Limpar a tabela
-                productList.innerHTML = '';
-                
-                if (produtos.length === 0) {
-                    const emptyRow = document.createElement('tr');
-                    emptyRow.id = 'empty-row';
-                    emptyRow.innerHTML = '<td colspan="7" class="text-center">Nenhum produto cadastrado</td>';
-                    productList.appendChild(emptyRow);
+            }
+        }
+    });
+    
+    // Exportar para Excel
+    exportBtn.addEventListener('click', function() {
+        window.location.href = '/api/export';
+    });
+    
+    // Enviar lista para o painel central
+    enviarListaBtn.addEventListener('click', function() {
+        // Verificar se há produtos na lista
+        if (document.getElementById('empty-row')) {
+            showNotification('Não há produtos para enviar', 'warning');
+            return;
+        }
+        
+        if (confirm('Tem certeza que deseja enviar esta lista para o painel central? Após o envio, não será possível editar.')) {
+            fetch('/api/enviar-lista', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success === false) {
+                    showNotification(data.message || 'Erro ao enviar lista', 'danger');
                 } else {
-                    produtos.forEach(produto => {
-                        const row = document.createElement('tr');
-                        row.setAttribute('data-id', produto.id);
-                        row.innerHTML = `
-                            <td>${produto.ean}</td>
-                            <td>${produto.nome}</td>
-                            <td>${produto.cor || ''}</td>
-                            <td>${produto.voltagem || ''}</td>
-                            <td>${produto.modelo || ''}</td>
-                            <td>${produto.quantidade}</td>
-                            <td>
-                                <button class="btn btn-danger btn-sm delete-btn" data-id="${produto.id}">Excluir</button>
-                            </td>
-                        `;
-                        productList.appendChild(row);
-                    });
+                    showNotification('Lista enviada com sucesso!', 'success');
+                    // Redirecionar para a página inicial após 2 segundos
+                    setTimeout(function() {
+                        window.location.reload();
+                    }, 2000);
                 }
-            }
-            
-            function showNotification(message, type) {
-                const notification = document.getElementById('notification');
-                const notificationMessage = document.getElementById('notification-message');
-                
-                notification.className = `alert alert-${type} alert-dismissible fade show`;
-                notificationMessage.textContent = message;
-                notification.style.display = 'block';
-                
-                setTimeout(hideNotification, 5000);
-            }
-            
-            window.hideNotification = function() {
-                const notification = document.getElementById('notification');
-                notification.style.display = 'none';
-            };
-        });
+            })
+            .catch(error => {
+                console.error('Erro:', error);
+                showNotification('Erro ao enviar lista', 'danger');
+            });
+        }
+    });
+    
+    // Função para atualizar a lista de produtos
+    function updateProductList(produtos) {
+        // Limpar a tabela
+        productList.innerHTML = '';
+        
+        if (!produtos || produtos.length === 0) {
+            const emptyRow = document.createElement('tr');
+            emptyRow.id = 'empty-row';
+            emptyRow.innerHTML = '<td colspan="7" class="text-center">Nenhum produto cadastrado</td>';
+            productList.appendChild(emptyRow);
+        } else {
+            produtos.forEach(produto => {
+                const row = document.createElement('tr');
+                row.setAttribute('data-id', produto.id);
+                row.innerHTML = `
+                    <td>${produto.ean}</td>
+                    <td>${produto.nome}</td>
+                    <td>${produto.cor || ''}</td>
+                    <td>${produto.voltagem || ''}</td>
+                    <td>${produto.modelo || ''}</td>
+                    <td>${produto.quantidade}</td>
+                    <td>
+                        <button class="btn btn-danger btn-sm delete-btn" data-id="${produto.id}">Excluir</button>
+                    </td>
+                `;
+                productList.appendChild(row);
+            });
+        }
+    }
+    
+    function showNotification(message, type) {
+        const notification = document.getElementById('notification');
+        notification.textContent = message;
+        notification.className = `alert alert-${type}`;
+        notification.style.display = 'block';
+        
+        // Esconder a notificação após 5 segundos
+        setTimeout(function() {
+            notification.style.display = 'none';
+        }, 5000);
+    }
+    
+    // Inicializar a lista de produtos
+    const produtosIniciais = {{ produtos|tojson }};
+    updateProductList(produtosIniciais);
+});
     </script>
 </body>
 </html>
