@@ -42,7 +42,45 @@ with app.app_context():
         db.session.commit()
         logger.info("Usuário admin criado com sucesso")
 
+# Mapeamento de senhas PI para responsáveis
+SENHAS_PI = {
+    "5584": "Liliane",
+    "9841": "Rogerio",
+    "2122": "Celso",
+    "6231": "Marcos"
+}
+
 # Funções auxiliares
+def validar_senha_pi(senha_pi):
+    """
+    Valida a senha PI e retorna o nome do responsável associado.
+    
+    Args:
+        senha_pi (str): Senha PI de 4 dígitos
+        
+    Returns:
+        dict: Dicionário com status de sucesso e nome do responsável (se válido)
+    """
+    # Validar formato da senha (4 dígitos)
+    if not senha_pi or not senha_pi.isdigit() or len(senha_pi) != 4:
+        return {
+            "success": False,
+            "message": "Senha PI inválida. Deve conter 4 dígitos numéricos."
+        }
+    
+    # Verificar se a senha existe no mapeamento
+    if senha_pi in SENHAS_PI:
+        return {
+            "success": True,
+            "responsavel": SENHAS_PI[senha_pi],
+            "message": f"Senha PI validada com sucesso. Responsável: {SENHAS_PI[senha_pi]}"
+        }
+    else:
+        return {
+            "success": False,
+            "message": "Senha PI não reconhecida. Por favor, verifique e tente novamente."
+        }
+
 def buscar_produto_local(ean, usuario_id):
     produto = Produto.query.filter_by(ean=ean, usuario_id=usuario_id).first()
     if produto:
@@ -292,7 +330,23 @@ def pesquisar_produtos(termo_pesquisa):
     
     return resultado
 
-def enviar_lista_produtos(usuario_id):
+def enviar_lista_produtos(usuario_id, senha_pi):
+    """
+    Envia a lista de produtos para o painel administrativo, com autenticação por senha PI.
+    
+    Args:
+        usuario_id (int): ID do usuário que está enviando a lista
+        senha_pi (str): Senha PI de 4 dígitos para autenticação
+        
+    Returns:
+        dict: Dicionário com status de sucesso e mensagem
+    """
+    # Validar a senha PI
+    validacao = validar_senha_pi(senha_pi)
+    if not validacao["success"]:
+        return validacao
+    
+    responsavel_pi = validacao["responsavel"]
     data_envio = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     # Marcar todos os produtos não enviados como enviados
@@ -306,31 +360,45 @@ def enviar_lista_produtos(usuario_id):
     
     if not produtos:
         logger.warning("Nenhum produto encontrado para enviar")
-        return None
+        return {
+            "success": False,
+            "message": "Nenhum produto encontrado para enviar."
+        }
     
     for produto in produtos:
         produto.enviado = 1  # Usar 1 em vez de true
         produto.data_envio = data_envio
-        logger.info(f"Produto {produto.id} ({produto.nome}) marcado como enviado")
+        produto.responsavel_pi = responsavel_pi
+        produto.senha_pi = senha_pi
+        logger.info(f"Produto {produto.id} ({produto.nome}) marcado como enviado, responsável PI: {responsavel_pi}")
     
     try:
         db.session.commit()
-        logger.info(f"Commit realizado com sucesso, {len(produtos)} produtos enviados")
+        logger.info(f"Commit realizado com sucesso, {len(produtos)} produtos enviados com responsável PI: {responsavel_pi}")
         
         # Verificar se os produtos foram realmente atualizados
         produtos_verificacao = Produto.query.filter_by(
             usuario_id=usuario_id,
             enviado=1,
-            data_envio=data_envio
+            data_envio=data_envio,
+            responsavel_pi=responsavel_pi
         ).all()
         
         logger.info(f"Verificação pós-commit: {len(produtos_verificacao)} produtos encontrados com data_envio={data_envio}")
         
-        return data_envio
+        return {
+            "success": True,
+            "data_envio": data_envio,
+            "responsavel_pi": responsavel_pi,
+            "message": f"Lista enviada com sucesso! Responsável: {responsavel_pi}"
+        }
     except Exception as e:
         logger.error(f"Erro ao fazer commit das alterações: {str(e)}")
         db.session.rollback()
-        return None
+        return {
+            "success": False,
+            "message": f"Erro ao enviar lista: {str(e)}"
+        }
 
 def validar_lista(data_envio, nome_usuario, validador_id):
     # Obter o ID do usuário pelo nome
@@ -419,224 +487,220 @@ def admin():
     # Agrupar por usuário e data de envio
     listas_por_usuario = {}
     for produto in listas_enviadas:
-        chave = (produto['nome_usuario'], produto['data_envio'])
+        chave = (produto['nome_usuario'], produto['data_envio'], produto.get('responsavel_pi', ''))
         if chave not in listas_por_usuario:
             listas_por_usuario[chave] = []
         listas_por_usuario[chave].append(produto)
     
     # Log para depuração
     logger.info(f"Rota /admin: Agrupados em {len(listas_por_usuario)} listas distintas")
-    for chave in listas_por_usuario:
-        logger.info(f"Lista de {chave[0]} enviada em {chave[1]} contém {len(listas_por_usuario[chave])} produtos")
+    for (nome_usuario, data_envio, responsavel_pi), produtos in listas_por_usuario.items():
+        logger.info(f"Lista de {nome_usuario} enviada em {data_envio} por {responsavel_pi} contém {len(produtos)} produtos")
     
     return render_template('admin.html', nome_usuario=nome_usuario, listas_por_usuario=listas_por_usuario)
 
-@app.route('/api/buscar-produto')
+# API Routes
+@app.route('/api/buscar-produto', methods=['GET'])
 def api_buscar_produto():
     if 'usuario_id' not in session:
-        return jsonify({"success": False, "message": "Não autenticado"})
+        return jsonify({'success': False, 'message': 'Usuário não autenticado'})
     
-    ean = request.args.get('ean')
+    ean = request.args.get('ean', '')
     if not ean:
-        return jsonify({"success": False, "message": "EAN não fornecido"})
+        return jsonify({'success': False, 'message': 'EAN não fornecido'})
     
-    # Primeiro, verificar se o produto já existe para este usuário
     usuario_id = session['usuario_id']
-    produto_local = buscar_produto_local(ean, usuario_id)
     
+    # Verificar se o produto já existe localmente
+    produto_local = buscar_produto_local(ean, usuario_id)
     if produto_local:
-        # Mapear os campos do produto local para o formato esperado pelo frontend
         return jsonify({
-            "success": True,
-            "nome": produto_local.get("nome", ""),
-            "cor": produto_local.get("cor", ""),
-            "voltagem": produto_local.get("voltagem", ""),
-            "modelo": produto_local.get("modelo", ""),
-            "quantidade": produto_local.get("quantidade", 1),
-            "message": "Produto encontrado localmente"
+            'success': True,
+            'nome': produto_local['nome'],
+            'cor': produto_local['cor'],
+            'voltagem': produto_local['voltagem'],
+            'modelo': produto_local['modelo'],
+            'quantidade': produto_local['quantidade'],
+            'message': 'Produto encontrado localmente'
         })
     
-    # Se não encontrou localmente, buscar online
+    # Buscar produto online
     resultado = buscar_produto_online(ean)
     return jsonify(resultado)
 
-@app.route('/api/produtos', methods=['GET', 'POST', 'DELETE'])
+@app.route('/api/produtos', methods=['GET', 'POST'])
 def api_produtos():
     if 'usuario_id' not in session:
-        return jsonify({"success": False, "message": "Não autenticado"})
+        return jsonify({'success': False, 'message': 'Usuário não autenticado'})
     
     usuario_id = session['usuario_id']
     
-    if request.method == 'GET':
-        produtos = carregar_produtos_usuario(usuario_id)
-        return jsonify({
-            "success": True,
-            "produtos": produtos
-        })
-    
-    elif request.method == 'POST':
-        dados = request.json
+    if request.method == 'POST':
+        data = request.get_json()
         
-        if not dados or not dados.get('ean') or not dados.get('nome'):
-            return jsonify({
-                "success": False,
-                "message": "Dados incompletos"
-            })
+        ean = data.get('ean', '')
+        nome = data.get('nome', '')
+        cor = data.get('cor', '')
+        voltagem = data.get('voltagem', '')
+        modelo = data.get('modelo', '')
+        quantidade = data.get('quantidade', 1)
+        
+        if not ean or not nome:
+            return jsonify({'success': False, 'message': 'EAN e nome são obrigatórios'})
         
         # Verificar se o produto já existe
-        produto_existente = Produto.query.filter_by(
-            ean=dados['ean'],
-            usuario_id=usuario_id,
-            enviado=0  # Usar 0 em vez de false
-        ).first()
-        
+        produto_existente = Produto.query.filter_by(ean=ean, usuario_id=usuario_id, enviado=0).first()
         if produto_existente:
-            # Atualizar produto existente
-            produto_existente.nome = dados['nome']
-            produto_existente.cor = dados.get('cor', '')
-            produto_existente.voltagem = dados.get('voltagem', '')
-            produto_existente.modelo = dados.get('modelo', '')
-            produto_existente.quantidade = dados.get('quantidade', 1)
-            produto_existente.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            # Criar novo produto
-            novo_produto = Produto(
-                ean=dados['ean'],
-                nome=dados['nome'],
-                cor=dados.get('cor', ''),
-                voltagem=dados.get('voltagem', ''),
-                modelo=dados.get('modelo', ''),
-                quantidade=dados.get('quantidade', 1),
-                usuario_id=usuario_id,
-                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                enviado=0  # Usar 0 em vez de false
-            )
-            db.session.add(novo_produto)
+            produto_existente.nome = nome
+            produto_existente.cor = cor
+            produto_existente.voltagem = voltagem
+            produto_existente.modelo = modelo
+            produto_existente.quantidade = quantidade
+            db.session.commit()
+            
+            return jsonify({
+                'success': True,
+                'message': 'Produto atualizado com sucesso',
+                'produtos': carregar_produtos_usuario(usuario_id)
+            })
         
+        # Criar novo produto
+        novo_produto = Produto(
+            ean=ean,
+            nome=nome,
+            cor=cor,
+            voltagem=voltagem,
+            modelo=modelo,
+            quantidade=quantidade,
+            usuario_id=usuario_id
+        )
+        
+        db.session.add(novo_produto)
         db.session.commit()
         
-        # Retornar a lista atualizada de produtos
-        produtos = carregar_produtos_usuario(usuario_id)
         return jsonify({
-            "success": True,
-            "message": "Produto adicionado com sucesso",
-            "produtos": produtos
+            'success': True,
+            'message': 'Produto adicionado com sucesso',
+            'produtos': carregar_produtos_usuario(usuario_id)
         })
     
-    elif request.method == 'DELETE':
-        return jsonify({
-            "success": False,
-            "message": "Método DELETE não implementado nesta rota"
-        })
+    # GET request - retornar todos os produtos do usuário
+    produtos = carregar_produtos_usuario(usuario_id)
+    return jsonify({'success': True, 'produtos': produtos})
 
 @app.route('/api/produtos/<int:produto_id>', methods=['DELETE'])
-def api_produto_delete(produto_id):
+def api_deletar_produto(produto_id):
     if 'usuario_id' not in session:
-        return jsonify({"success": False, "message": "Não autenticado"})
+        return jsonify({'success': False, 'message': 'Usuário não autenticado'})
     
     usuario_id = session['usuario_id']
     
-    # Buscar o produto
     produto = Produto.query.filter_by(id=produto_id, usuario_id=usuario_id).first()
-    
     if not produto:
-        return jsonify({
-            "success": False,
-            "message": "Produto não encontrado"
-        })
+        return jsonify({'success': False, 'message': 'Produto não encontrado'})
     
-    # Verificar se o produto já foi enviado
-    if produto.enviado == 1:  # Usar 1 em vez de true
-        return jsonify({
-            "success": False,
-            "message": "Não é possível excluir um produto já enviado"
-        })
-    
-    # Excluir o produto
     db.session.delete(produto)
     db.session.commit()
     
-    # Retornar a lista atualizada de produtos
-    produtos = carregar_produtos_usuario(usuario_id)
     return jsonify({
-        "success": True,
-        "message": "Produto removido com sucesso",
-        "produtos": produtos
+        'success': True,
+        'message': 'Produto removido com sucesso',
+        'produtos': carregar_produtos_usuario(usuario_id)
     })
 
 @app.route('/api/enviar-lista', methods=['POST'])
 def api_enviar_lista():
     if 'usuario_id' not in session:
-        return jsonify({"success": False, "message": "Não autenticado"})
+        return jsonify({'success': False, 'message': 'Usuário não autenticado'})
     
     usuario_id = session['usuario_id']
     
-    # Log para depuração
-    logger.info(f"Iniciando envio de lista para o usuário {usuario_id}")
+    # Obter a senha PI do corpo da requisição
+    data = request.get_json()
+    senha_pi = data.get('senha_pi', '')
     
-    data_envio = enviar_lista_produtos(usuario_id)
-    
-    if data_envio:
-        logger.info(f"Lista enviada com sucesso, data_envio: {data_envio}")
+    if not senha_pi:
         return jsonify({
-            "success": True,
-            "message": "Lista enviada com sucesso",
-            "data_envio": data_envio
+            'success': False,
+            'message': 'Senha PI não fornecida. Por favor, informe a senha PI para confirmar o envio.'
         })
+    
+    # Enviar a lista com autenticação PI
+    logger.info(f"Iniciando envio de lista para o usuário {usuario_id} com senha PI {senha_pi}")
+    resultado = enviar_lista_produtos(usuario_id, senha_pi)
+    
+    if resultado["success"]:
+        logger.info(f"Lista enviada com sucesso, data_envio: {resultado['data_envio']}, responsável: {resultado['responsavel_pi']}")
     else:
-        logger.error("Erro ao enviar lista ou nenhum produto para enviar")
-        return jsonify({
-            "success": False,
-            "message": "Erro ao enviar lista ou nenhum produto para enviar"
-        })
+        logger.error(f"Erro ao enviar lista: {resultado['message']}")
+    
+    return jsonify(resultado)
 
 @app.route('/api/validar-lista', methods=['POST'])
 def api_validar_lista():
     if 'usuario_id' not in session or not session.get('admin'):
-        return jsonify({"success": False, "message": "Não autorizado"})
-    
-    dados = request.json
-    if not dados or 'nome_usuario' not in dados or 'data_envio' not in dados:
-        return jsonify({"success": False, "message": "Dados incompletos"})
+        return jsonify({'success': False, 'message': 'Acesso não autorizado'})
     
     validador_id = session['usuario_id']
-    if validar_lista(dados['data_envio'], dados['nome_usuario'], validador_id):
-        return jsonify({
-            "success": True,
-            "message": "Lista validada com sucesso"
-        })
+    data = request.get_json()
+    
+    nome_usuario = data.get('nome_usuario', '')
+    data_envio = data.get('data_envio', '')
+    
+    if not nome_usuario or not data_envio:
+        return jsonify({'success': False, 'message': 'Parâmetros inválidos'})
+    
+    resultado = validar_lista(data_envio, nome_usuario, validador_id)
+    
+    if resultado:
+        return jsonify({'success': True, 'message': 'Lista validada com sucesso'})
     else:
-        return jsonify({
-            "success": False,
-            "message": "Erro ao validar lista"
-        })
+        return jsonify({'success': False, 'message': 'Erro ao validar lista'})
 
-@app.route('/api/export')
-def api_export():
-    if 'usuario_id' not in session:
-        return jsonify({"success": False, "message": "Não autenticado"})
+@app.route('/api/exportar-excel', methods=['POST'])
+def api_exportar_excel():
+    if 'usuario_id' not in session or not session.get('admin'):
+        return jsonify({'success': False, 'message': 'Acesso não autorizado'})
     
-    usuario_id = session['usuario_id']
+    data = request.get_json()
+    nome_usuario = data.get('nome_usuario', '')
+    data_envio = data.get('data_envio', '')
     
-    # Buscar produtos não enviados do usuário
+    if not nome_usuario or not data_envio:
+        return jsonify({'success': False, 'message': 'Parâmetros inválidos'})
+    
+    # Obter o ID do usuário pelo nome
+    usuario = Usuario.query.filter_by(nome=nome_usuario).first()
+    if not usuario:
+        return jsonify({'success': False, 'message': 'Usuário não encontrado'})
+    
+    usuario_id = usuario.id
+    
+    # Buscar produtos da lista
     produtos = Produto.query.filter_by(
         usuario_id=usuario_id,
-        enviado=0  # Usar 0 em vez de false
+        data_envio=data_envio,
+        enviado=1  # Usar 1 em vez de true
     ).all()
     
-    # Converter para DataFrame
-    data = []
+    if not produtos:
+        return jsonify({'success': False, 'message': 'Nenhum produto encontrado'})
+    
+    # Criar DataFrame
+    dados = []
     for produto in produtos:
-        data.append({
+        dados.append({
             'EAN': produto.ean,
             'Nome': produto.nome,
             'Cor': produto.cor,
             'Voltagem': produto.voltagem,
             'Modelo': produto.modelo,
-            'Quantidade': produto.quantidade
+            'Quantidade': produto.quantidade,
+            'Data de Envio': produto.data_envio,
+            'Responsável PI': produto.responsavel_pi
         })
     
-    df = pd.DataFrame(data)
+    df = pd.DataFrame(dados)
     
     # Criar arquivo Excel em memória
     output = io.BytesIO()
@@ -645,26 +709,33 @@ def api_export():
     
     output.seek(0)
     
-    # Gerar nome do arquivo com timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"produtos_{timestamp}.xlsx"
+    # Gerar nome do arquivo
+    nome_arquivo = f"lista_{nome_usuario}_{data_envio.replace(' ', '_').replace(':', '-')}.xlsx"
     
-    return send_file(
-        output,
-        as_attachment=True,
-        download_name=filename,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    )
+    # Salvar temporariamente o arquivo
+    caminho_arquivo = os.path.join(app.root_path, 'temp', nome_arquivo)
+    os.makedirs(os.path.dirname(caminho_arquivo), exist_ok=True)
+    
+    with open(caminho_arquivo, 'wb') as f:
+        f.write(output.getvalue())
+    
+    return jsonify({
+        'success': True,
+        'message': 'Excel gerado com sucesso',
+        'arquivo': nome_arquivo
+    })
 
-@app.route('/ml-callback')
-def ml_callback():
-    code = request.args.get('code')
-    if code:
-        # Salvar o código de autorização
-        os.environ['ML_AUTH_CODE'] = code
-        return "Autorização concedida com sucesso! Você pode fechar esta janela."
-    else:
-        return "Erro ao obter código de autorização."
+@app.route('/download-excel/<nome_arquivo>')
+def download_excel(nome_arquivo):
+    if 'usuario_id' not in session or not session.get('admin'):
+        return redirect(url_for('login'))
+    
+    caminho_arquivo = os.path.join(app.root_path, 'temp', nome_arquivo)
+    
+    if not os.path.exists(caminho_arquivo):
+        return "Arquivo não encontrado", 404
+    
+    return send_file(caminho_arquivo, as_attachment=True)
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0')
