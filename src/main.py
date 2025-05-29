@@ -33,11 +33,11 @@ with app.app_context():
     db.create_all()
     
     # Verificar se existe um usuário admin
-    admin = Usuario.query.filter_by(username='admin').first()
+    admin = Usuario.query.filter_by(nome='admin').first()
     if not admin:
         # Criar usuário admin
         hashed_password = generate_password_hash('admin')
-        admin = Usuario(username='admin', nome='Administrador', password=hashed_password, admin=1)
+        admin = Usuario(nome='admin', senha_hash=hashed_password, admin=1)
         db.session.add(admin)
         db.session.commit()
         logger.info("Usuário admin criado com sucesso")
@@ -376,12 +376,12 @@ def index():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form.get('username')
+        nome = request.form.get('username')  # Mantido 'username' no form para compatibilidade
         password = request.form.get('password')
         
-        usuario = Usuario.query.filter_by(username=username).first()
+        usuario = Usuario.query.filter_by(nome=nome).first()
         
-        if usuario and check_password_hash(usuario.password, password):
+        if usuario and check_password_hash(usuario.senha_hash, password):
             session['usuario_id'] = usuario.id
             session['nome_usuario'] = usuario.nome
             session['admin'] = usuario.admin
