@@ -1,63 +1,227 @@
 import sys
 import os
 from datetime import datetime
-import io
-import requests
-from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session, flash
-import pandas as pd
-import json
 import logging
+import json
+import requests
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file
+from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
+import pandas as pd
+import io
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Importar configurações e banco de dados
-from src.config import get_config
-from src.database import db, init_db
+# Configuração do banco de dados
+from src.config import Config
+from src.database import db
 from src.models.usuario import Usuario
 from src.models.produto import Produto
 
-# Importar o módulo de busca do Mercado Livre
-from src.mercado_livre import buscar_produto_por_ean
-
-# Inicializar aplicação Flask
+# Inicialização do app Flask
 app = Flask(__name__)
-app.config.from_object(get_config())
+app.config.from_object(Config)
+app.secret_key = os.environ.get('SECRET_KEY', 'chave_secreta_padrao')
 
-# Inicializar banco de dados
-init_db(app)
+# Inicializar o banco de dados
+db.init_app(app)
 
-# Funções de autenticação
-def registrar_usuario(nome, senha):
-    try:
-        senha_hash = generate_password_hash(senha)
-        novo_usuario = Usuario(nome=nome, senha_hash=senha_hash)
-        db.session.add(novo_usuario)
+# Criar tabelas se não existirem
+with app.app_context():
+    db.create_all()
+    
+    # Verificar se existe um usuário admin
+    admin = Usuario.query.filter_by(username='admin').first()
+    if not admin:
+        # Criar usuário admin
+        hashed_password = generate_password_hash('admin')
+        admin = Usuario(username='admin', nome='Administrador', password=hashed_password, admin=1)
+        db.session.add(admin)
         db.session.commit()
-        return True
-    except Exception:
-        # Nome de usuário já existe ou outro erro
-        db.session.rollback()
-        return False
+        logger.info("Usuário admin criado com sucesso")
 
-def verificar_usuario(nome, senha):
-    usuario = Usuario.query.filter_by(nome=nome).first()
-    if usuario and check_password_hash(usuario.senha_hash, senha):
-        return {'id': usuario.id, 'admin': usuario.admin}
+# Funções auxiliares
+def buscar_produto_local(ean, usuario_id):
+    produto = Produto.query.filter_by(ean=ean, usuario_id=usuario_id).first()
+    if produto:
+        return produto.to_dict()
     return None
 
-def obter_nome_usuario(usuario_id):
-    usuario = Usuario.query.get(usuario_id)
-    return usuario.nome if usuario else None
+def buscar_produto_online(ean):
+    try:
+        # Obter token de acesso para a API do Mercado Livre
+        logger.info(f"Iniciando busca para o EAN: {ean}")
+        logger.info("Obtendo token de acesso para a API do Mercado Livre")
+        
+        # Credenciais do Mercado Livre
+        client_id = os.environ.get('ML_CLIENT_ID', '7496208333316548')
+        client_secret = os.environ.get('ML_CLIENT_SECRET', 'Ue9Uf0RVZM5oDLdVOFXbIlXUTJVbYQXE')
+        redirect_uri = os.environ.get('ML_REDIRECT_URI', 'https://ean2-0-aipr.onrender.com/ml-callback')
+        
+        # Tentar obter token com código de autorização
+        logger.info("Solicitando novo token com código de autorização")
+        auth_code = os.environ.get('ML_AUTH_CODE', '')
+        
+        token = None
+        
+        if auth_code:
+            try:
+                token_url = "https://api.mercadolibre.com/oauth/token"
+                token_data = {
+                    "grant_type": "authorization_code",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": auth_code,
+                    "redirect_uri": redirect_uri
+                }
+                token_response = requests.post(token_url, data=token_data)
+                
+                if token_response.status_code == 200:
+                    token_info = token_response.json()
+                    token = token_info.get('access_token')
+                    logger.info(f"Token de acesso obtido com sucesso: {token[:5]}...")
+                else:
+                    logger.error(f"Erro ao obter token de acesso: {token_response.status_code} - {token_response.text}")
+            except Exception as e:
+                logger.error(f"Exceção ao obter token de acesso: {str(e)}")
+        
+        # Se não conseguiu com código de autorização, tentar com client_credentials
+        if not token:
+            logger.info("Tentando método alternativo com client_credentials")
+            try:
+                token_url = "https://api.mercadolibre.com/oauth/token"
+                token_data = {
+                    "grant_type": "client_credentials",
+                    "client_id": client_id,
+                    "client_secret": client_secret
+                }
+                token_response = requests.post(token_url, data=token_data)
+                
+                if token_response.status_code == 200:
+                    token_info = token_response.json()
+                    token = token_info.get('access_token')
+                    logger.info(f"Token de acesso obtido com sucesso via client_credentials: {token[:10]}...")
+                else:
+                    logger.error(f"Erro ao obter token via client_credentials: {token_response.status_code} - {token_response.text}")
+                    return None
+            except Exception as e:
+                logger.error(f"Exceção ao obter token via client_credentials: {str(e)}")
+                return None
+        
+        # Estratégia 1: Buscar produto usando o endpoint products/search
+        logger.info(f"Estratégia 1: Buscando produto com EAN {ean} usando endpoint products/search")
+        search_url = f"https://api.mercadolibre.com/sites/MLB/search?q={ean}"
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        response = requests.get(search_url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get('results', [])
+            
+            logger.info(f"Endpoint products/search retornou {len(results)} resultados")
+            
+            if results:
+                produto = results[0]
+                nome = produto.get('title', '')
+                logger.info(f"Produto encontrado via products/search: {nome}")
+                
+                # Extrair informações adicionais
+                atributos = produto.get('attributes', [])
+                cor = ""
+                voltagem = ""
+                modelo = ""
+                
+                for attr in atributos:
+                    if attr.get('id') == 'COLOR':
+                        cor = attr.get('value_name', '')
+                    elif attr.get('id') == 'VOLTAGE':
+                        voltagem = attr.get('value_name', '')
+                    elif attr.get('id') == 'MODEL':
+                        modelo = attr.get('value_name', '')
+                
+                resultado = {
+                    'success': True,
+                    'nome': nome,
+                    'cor': cor,
+                    'voltagem': voltagem,
+                    'modelo': modelo,
+                    'quantidade': 1,
+                    'message': 'Informações do produto carregadas com sucesso!'
+                }
+                
+                logger.info(f"Resultado da busca online: {resultado}")
+                return resultado
+        
+        # Se não encontrou com a primeira estratégia, tentar a segunda
+        logger.info(f"Estratégia 2: Buscando produto com EAN {ean} usando endpoint items/search")
+        search_url = f"https://api.mercadolibre.com/items/search?q={ean}"
+        
+        response = requests.get(search_url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get('results', [])
+            
+            logger.info(f"Endpoint items/search retornou {len(items)} resultados")
+            
+            if items:
+                item_id = items[0]
+                item_url = f"https://api.mercadolibre.com/items/{item_id}"
+                
+                item_response = requests.get(item_url, headers=headers)
+                if item_response.status_code == 200:
+                    produto = item_response.json()
+                    nome = produto.get('title', '')
+                    logger.info(f"Produto encontrado via items/search: {nome}")
+                    
+                    # Extrair informações adicionais
+                    atributos = produto.get('attributes', [])
+                    cor = ""
+                    voltagem = ""
+                    modelo = ""
+                    
+                    for attr in atributos:
+                        if attr.get('id') == 'COLOR':
+                            cor = attr.get('value_name', '')
+                        elif attr.get('id') == 'VOLTAGE':
+                            voltagem = attr.get('value_name', '')
+                        elif attr.get('id') == 'MODEL':
+                            modelo = attr.get('value_name', '')
+                    
+                    resultado = {
+                        'success': True,
+                        'nome': nome,
+                        'cor': cor,
+                        'voltagem': voltagem,
+                        'modelo': modelo,
+                        'quantidade': 1,
+                        'message': 'Informações do produto carregadas com sucesso!'
+                    }
+                    
+                    logger.info(f"Resultado da busca online: {resultado}")
+                    return resultado
+        
+        # Se chegou aqui, não encontrou o produto
+        logger.warning(f"Produto com EAN {ean} não encontrado online")
+        return {
+            'success': False,
+            'message': 'Produto não encontrado'
+        }
+    
+    except Exception as e:
+        logger.error(f"Erro ao buscar produto online: {str(e)}")
+        return {
+            'success': False,
+            'message': f'Erro ao buscar produto: {str(e)}'
+        }
 
-# Funções de produtos
-def carregar_produtos_usuario(usuario_id, apenas_nao_enviados=False):
-    query = Produto.query.filter_by(usuario_id=usuario_id)
-    if apenas_nao_enviados:
-        query = query.filter_by(enviado=0)
-    produtos = query.all()
+def carregar_produtos_usuario(usuario_id):
+    produtos = Produto.query.filter_by(
+        usuario_id=usuario_id,
+        enviado=0  # Usar 0 em vez de false
+    ).all()
+    
     return [produto.to_dict() for produto in produtos]
 
 def carregar_todas_listas_enviadas():
@@ -87,13 +251,18 @@ def carregar_todas_listas_enviadas():
         produto_dict['nome_validador'] = nome_validador
         resultado.append(produto_dict)
     
+    # Log para depuração
+    logger.info(f"carregar_todas_listas_enviadas: Encontrados {len(resultado)} produtos enviados")
+    if resultado:
+        logger.info(f"Exemplo do primeiro produto: {resultado[0]}")
+    
     return resultado
 
 def pesquisar_produtos(termo_pesquisa):
     # Criar o alias para a tabela de validador apenas uma vez
     ValidadorAlias = db.aliased(Usuario, name='validador_alias')
     
-    # Buscar produtos que correspondem ao termo de pesquisa (EAN ou palavra na descrição)
+    # Buscar produtos que correspondem ao termo de pesquisa
     produtos = db.session.query(
         Produto, 
         Usuario.nome.label('nome_usuario'),
@@ -105,10 +274,9 @@ def pesquisar_produtos(termo_pesquisa):
     ).filter(
         Produto.enviado == 1,  # Usar 1 em vez de true
         db.or_(
-            Produto.ean.ilike(f'%{termo_pesquisa}%'),
-            Produto.nome.ilike(f'%{termo_pesquisa}%'),
-            Produto.cor.ilike(f'%{termo_pesquisa}%'),
-            Produto.modelo.ilike(f'%{termo_pesquisa}%')
+            Produto.ean.like(f'%{termo_pesquisa}%'),
+            Produto.nome.like(f'%{termo_pesquisa}%'),
+            Usuario.nome.like(f'%{termo_pesquisa}%')
         )
     ).order_by(
         Produto.data_envio.desc()
@@ -124,51 +292,6 @@ def pesquisar_produtos(termo_pesquisa):
     
     return resultado
 
-def buscar_produto_local(ean, usuario_id):
-    produto = Produto.query.filter_by(
-        ean=ean,
-        usuario_id=usuario_id,
-        enviado=0  # Usar 0 em vez de false
-    ).first()
-    
-    if produto:
-        return produto.to_dict()
-    return None
-
-def salvar_produto(produto, usuario_id):
-    # Verificar se o produto já existe para este usuário e não foi enviado
-    produto_existente = Produto.query.filter_by(
-        ean=produto['ean'],
-        usuario_id=usuario_id,
-        enviado=0  # Usar 0 em vez de false
-    ).first()
-    
-    try:
-        if produto_existente:
-            # Atualizar quantidade
-            produto_existente.quantidade += produto['quantidade']
-            produto_existente.timestamp = produto['timestamp']
-        else:
-            # Inserir novo produto
-            novo_produto = Produto(
-                ean=produto['ean'],
-                nome=produto['nome'],
-                cor=produto['cor'],
-                voltagem=produto['voltagem'],
-                modelo=produto['modelo'],
-                quantidade=produto['quantidade'],
-                usuario_id=usuario_id,
-                timestamp=produto['timestamp'],
-                enviado=0  # Usar 0 em vez de false
-            )
-            db.session.add(novo_produto)
-        
-        db.session.commit()
-        return True
-    except Exception:
-        db.session.rollback()
-        return False
-
 def enviar_lista_produtos(usuario_id):
     data_envio = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
@@ -178,12 +301,36 @@ def enviar_lista_produtos(usuario_id):
         enviado=0  # Usar 0 em vez de false
     ).all()
     
+    # Log para depuração
+    logger.info(f"enviar_lista_produtos: Encontrados {len(produtos)} produtos para enviar")
+    
+    if not produtos:
+        logger.warning("Nenhum produto encontrado para enviar")
+        return None
+    
     for produto in produtos:
         produto.enviado = 1  # Usar 1 em vez de true
         produto.data_envio = data_envio
+        logger.info(f"Produto {produto.id} ({produto.nome}) marcado como enviado")
     
-    db.session.commit()
-    return data_envio
+    try:
+        db.session.commit()
+        logger.info(f"Commit realizado com sucesso, {len(produtos)} produtos enviados")
+        
+        # Verificar se os produtos foram realmente atualizados
+        produtos_verificacao = Produto.query.filter_by(
+            usuario_id=usuario_id,
+            enviado=1,
+            data_envio=data_envio
+        ).all()
+        
+        logger.info(f"Verificação pós-commit: {len(produtos_verificacao)} produtos encontrados com data_envio={data_envio}")
+        
+        return data_envio
+    except Exception as e:
+        logger.error(f"Erro ao fazer commit das alterações: {str(e)}")
+        db.session.rollback()
+        return None
 
 def validar_lista(data_envio, nome_usuario, validador_id):
     # Obter o ID do usuário pelo nome
@@ -201,6 +348,9 @@ def validar_lista(data_envio, nome_usuario, validador_id):
         enviado=1  # Usar 1 em vez de true
     ).all()
     
+    if not produtos:
+        return False
+    
     for produto in produtos:
         produto.validado = 1  # Usar 1 em vez de true
         produto.validador_id = validador_id
@@ -209,178 +359,62 @@ def validar_lista(data_envio, nome_usuario, validador_id):
     db.session.commit()
     return True
 
-def excluir_produto(produto_id, usuario_id):
-    produto = Produto.query.filter_by(
-        id=produto_id,
-        usuario_id=usuario_id,
-        enviado=0  # Usar 0 em vez de false
-    ).first()
-    
-    if produto:
-        db.session.delete(produto)
-        db.session.commit()
-        return True
-    return False
-
-# Função para buscar informações do produto por EAN online
-def buscar_produto_online(ean):
-    try:
-        # Primeiro, tentamos buscar no Mercado Livre
-        resultado_ml = buscar_produto_por_ean(ean)
-        if resultado_ml and resultado_ml.get("success"):
-            # Extrair os dados do produto para o formato esperado pelo frontend
-            produto_data = resultado_ml.get("data", {})
-            
-            # Mapear os campos do resultado para o formato esperado pelo frontend
-            return {
-                "success": True,
-                "nome": produto_data.get("nome", f"Produto {ean}"),
-                "cor": produto_data.get("cor", ""),
-                "voltagem": produto_data.get("voltagem", ""),
-                "modelo": produto_data.get("modelo", ""),
-                "quantidade": 1,
-                "message": "Informações do produto carregadas com sucesso!"
-            }
-        
-        # Se não encontrar no Mercado Livre, tentamos a API alternativa
-        token_url = "https://gtin.rscsistemas.com.br/oauth/token"
-        token_response = requests.post(token_url, json={
-            "username": "demo",  # Usuário demo para testes
-            "password": "demo"   # Senha demo para testes
-        }, timeout=5)
-        
-        if token_response.status_code != 200:
-            # Se não conseguir autenticar, retornamos dados básicos para edição manual
-            return {
-                "success": True,
-                "nome": f"Produto {ean}",
-                "cor": "",
-                "voltagem": "",
-                "modelo": "",
-                "quantidade": 1,
-                "message": "Produto não encontrado na base de dados. Por favor, preencha as informações manualmente."
-            }
-        
-        token_data = token_response.json()
-        token = token_data.get("token")
-        
-        # Com o token, buscamos as informações do produto
-        produto_url = f"https://gtin.rscsistemas.com.br/api/gtin/infor/{ean}"
-        headers = {"Authorization": f"Bearer {token}"}
-        produto_response = requests.get(produto_url, headers=headers, timeout=5)
-        
-        if produto_response.status_code == 200:
-            produto_data = produto_response.json()
-            
-            # Verificar se o produto foi realmente encontrado ou se é uma resposta padrão de "não encontrado"
-            if produto_data.get("nome") == "405" or produto_data.get("ean") == "405":
-                return {
-                    "success": True,
-                    "nome": f"Produto {ean}",
-                    "cor": "",
-                    "voltagem": "",
-                    "modelo": "",
-                    "quantidade": 1,
-                    "message": "Produto não encontrado na base de dados. Por favor, preencha as informações manualmente."
-                }
-            
-            return {
-                "success": True,
-                "nome": produto_data.get("nome", f"Produto {ean}"),
-                "cor": produto_data.get("cor", ""),
-                "voltagem": produto_data.get("voltagem", ""),
-                "modelo": produto_data.get("modelo", ""),
-                "quantidade": 1,
-                "message": "Informações do produto carregadas com sucesso!"
-            }
-        else:
-            # Se não encontrar na API, retornamos dados básicos para edição manual
-            return {
-                "success": True,
-                "nome": f"Produto {ean}",
-                "cor": "",
-                "voltagem": "",
-                "modelo": "",
-                "quantidade": 1,
-                "message": "Produto não encontrado na base de dados. Por favor, preencha as informações manualmente."
-            }
-    except Exception as e:
-        logger.error(f"Erro ao buscar produto: {str(e)}")
-        # Em caso de erro, retornamos dados básicos para edição manual
-        return {
-            "success": True,
-            "nome": f"Produto {ean}",
-            "cor": "",
-            "voltagem": "",
-            "modelo": "",
-            "quantidade": 1,
-            "message": f"Erro ao buscar produto: {str(e)}. Por favor, preencha as informações manualmente."
-        }
-
-# Rotas de autenticação
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        nome = request.form.get('nome')
-        senha = request.form.get('senha')
-        
-        usuario = verificar_usuario(nome, senha)
-        if usuario:
-            session['usuario_id'] = usuario['id']
-            session['admin'] = usuario['admin']
-            
-            if usuario['admin']:
-                return redirect(url_for('admin_panel'))
-            else:
-                return redirect(url_for('index'))
-        else:
-            flash('Nome de usuário ou senha incorretos')
-    
-    return render_template('login.html')
-
-@app.route('/registro', methods=['GET', 'POST'])
-def registro():
-    if request.method == 'POST':
-        nome = request.form.get('nome')
-        senha = request.form.get('senha')
-        
-        if registrar_usuario(nome, senha):
-            flash('Usuário registrado com sucesso! Faça login para continuar.')
-            return redirect(url_for('login'))
-        else:
-            flash('Erro ao registrar usuário. Nome de usuário já existe ou ocorreu um erro.')
-    
-    return render_template('registro.html')
-
-@app.route('/logout')
-def logout():
-    session.pop('usuario_id', None)
-    session.pop('admin', None)
-    return redirect(url_for('login'))
-
-# Rotas principais
+# Rotas
 @app.route('/')
 def index():
     if 'usuario_id' not in session:
         return redirect(url_for('login'))
     
-    if session.get('admin'):
-        return redirect(url_for('admin_panel'))
-    
     usuario_id = session['usuario_id']
-    nome_usuario = obter_nome_usuario(usuario_id)
-    produtos = carregar_produtos_usuario(usuario_id, apenas_nao_enviados=True)
+    nome_usuario = session.get('nome_usuario', 'Usuário')
+    
+    # Carregar produtos do usuário
+    produtos = carregar_produtos_usuario(usuario_id)
     
     return render_template('index.html', nome_usuario=nome_usuario, produtos=produtos)
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        usuario = Usuario.query.filter_by(username=username).first()
+        
+        if usuario and check_password_hash(usuario.password, password):
+            session['usuario_id'] = usuario.id
+            session['nome_usuario'] = usuario.nome
+            session['admin'] = usuario.admin
+            
+            if usuario.admin:
+                return redirect(url_for('admin'))
+            else:
+                return redirect(url_for('index'))
+        else:
+            return render_template('login.html', error='Usuário ou senha inválidos')
+    
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
 @app.route('/admin')
-def admin_panel():
+def admin():
     if 'usuario_id' not in session or not session.get('admin'):
         return redirect(url_for('login'))
     
-    usuario_id = session['usuario_id']
-    nome_usuario = obter_nome_usuario(usuario_id)
-    listas_enviadas = carregar_todas_listas_enviadas()
+    nome_usuario = session.get('nome_usuario', 'Administrador')
+    termo_pesquisa = request.args.get('q', '')
+    
+    if termo_pesquisa:
+        listas_enviadas = pesquisar_produtos(termo_pesquisa)
+    else:
+        listas_enviadas = carregar_todas_listas_enviadas()
+    
+    # Log para depuração
+    logger.info(f"Rota /admin: Encontrados {len(listas_enviadas)} produtos enviados")
     
     # Agrupar por usuário e data de envio
     listas_por_usuario = {}
@@ -389,6 +423,11 @@ def admin_panel():
         if chave not in listas_por_usuario:
             listas_por_usuario[chave] = []
         listas_por_usuario[chave].append(produto)
+    
+    # Log para depuração
+    logger.info(f"Rota /admin: Agrupados em {len(listas_por_usuario)} listas distintas")
+    for chave in listas_por_usuario:
+        logger.info(f"Lista de {chave[0]} enviada em {chave[1]} contém {len(listas_por_usuario[chave])} produtos")
     
     return render_template('admin.html', nome_usuario=nome_usuario, listas_por_usuario=listas_por_usuario)
 
@@ -417,58 +456,113 @@ def api_buscar_produto():
             "message": "Produto encontrado localmente"
         })
     
-    # Se não existir localmente, buscar online
+    # Se não encontrou localmente, buscar online
     resultado = buscar_produto_online(ean)
-    logger.info(f"Resultado da busca online: {resultado}")
     return jsonify(resultado)
 
-@app.route('/api/produtos', methods=['POST'])
-def api_adicionar_produto():
+@app.route('/api/produtos', methods=['GET', 'POST', 'DELETE'])
+def api_produtos():
     if 'usuario_id' not in session:
         return jsonify({"success": False, "message": "Não autenticado"})
     
-    dados = request.json
-    if not dados:
-        return jsonify({"success": False, "message": "Dados não fornecidos"})
-    
-    # Adicionar timestamp
-    dados['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Salvar produto
     usuario_id = session['usuario_id']
-    if salvar_produto(dados, usuario_id):
-        # Recarregar produtos
-        produtos = carregar_produtos_usuario(usuario_id, apenas_nao_enviados=True)
+    
+    if request.method == 'GET':
+        produtos = carregar_produtos_usuario(usuario_id)
+        return jsonify({
+            "success": True,
+            "produtos": produtos
+        })
+    
+    elif request.method == 'POST':
+        dados = request.json
+        
+        if not dados or not dados.get('ean') or not dados.get('nome'):
+            return jsonify({
+                "success": False,
+                "message": "Dados incompletos"
+            })
+        
+        # Verificar se o produto já existe
+        produto_existente = Produto.query.filter_by(
+            ean=dados['ean'],
+            usuario_id=usuario_id,
+            enviado=0  # Usar 0 em vez de false
+        ).first()
+        
+        if produto_existente:
+            # Atualizar produto existente
+            produto_existente.nome = dados['nome']
+            produto_existente.cor = dados.get('cor', '')
+            produto_existente.voltagem = dados.get('voltagem', '')
+            produto_existente.modelo = dados.get('modelo', '')
+            produto_existente.quantidade = dados.get('quantidade', 1)
+            produto_existente.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            # Criar novo produto
+            novo_produto = Produto(
+                ean=dados['ean'],
+                nome=dados['nome'],
+                cor=dados.get('cor', ''),
+                voltagem=dados.get('voltagem', ''),
+                modelo=dados.get('modelo', ''),
+                quantidade=dados.get('quantidade', 1),
+                usuario_id=usuario_id,
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                enviado=0  # Usar 0 em vez de false
+            )
+            db.session.add(novo_produto)
+        
+        db.session.commit()
+        
+        # Retornar a lista atualizada de produtos
+        produtos = carregar_produtos_usuario(usuario_id)
         return jsonify({
             "success": True,
             "message": "Produto adicionado com sucesso",
             "produtos": produtos
         })
-    else:
+    
+    elif request.method == 'DELETE':
         return jsonify({
             "success": False,
-            "message": "Erro ao adicionar produto"
+            "message": "Método DELETE não implementado nesta rota"
         })
 
 @app.route('/api/produtos/<int:produto_id>', methods=['DELETE'])
-def api_excluir_produto(produto_id):
+def api_produto_delete(produto_id):
     if 'usuario_id' not in session:
         return jsonify({"success": False, "message": "Não autenticado"})
     
     usuario_id = session['usuario_id']
-    if excluir_produto(produto_id, usuario_id):
-        # Recarregar produtos
-        produtos = carregar_produtos_usuario(usuario_id, apenas_nao_enviados=True)
-        return jsonify({
-            "success": True,
-            "message": "Produto excluído com sucesso",
-            "produtos": produtos
-        })
-    else:
+    
+    # Buscar o produto
+    produto = Produto.query.filter_by(id=produto_id, usuario_id=usuario_id).first()
+    
+    if not produto:
         return jsonify({
             "success": False,
-            "message": "Erro ao excluir produto"
+            "message": "Produto não encontrado"
         })
+    
+    # Verificar se o produto já foi enviado
+    if produto.enviado == 1:  # Usar 1 em vez de true
+        return jsonify({
+            "success": False,
+            "message": "Não é possível excluir um produto já enviado"
+        })
+    
+    # Excluir o produto
+    db.session.delete(produto)
+    db.session.commit()
+    
+    # Retornar a lista atualizada de produtos
+    produtos = carregar_produtos_usuario(usuario_id)
+    return jsonify({
+        "success": True,
+        "message": "Produto removido com sucesso",
+        "produtos": produtos
+    })
 
 @app.route('/api/enviar-lista', methods=['POST'])
 def api_enviar_lista():
@@ -476,18 +570,24 @@ def api_enviar_lista():
         return jsonify({"success": False, "message": "Não autenticado"})
     
     usuario_id = session['usuario_id']
+    
+    # Log para depuração
+    logger.info(f"Iniciando envio de lista para o usuário {usuario_id}")
+    
     data_envio = enviar_lista_produtos(usuario_id)
     
     if data_envio:
+        logger.info(f"Lista enviada com sucesso, data_envio: {data_envio}")
         return jsonify({
             "success": True,
             "message": "Lista enviada com sucesso",
             "data_envio": data_envio
         })
     else:
+        logger.error("Erro ao enviar lista ou nenhum produto para enviar")
         return jsonify({
             "success": False,
-            "message": "Erro ao enviar lista"
+            "message": "Erro ao enviar lista ou nenhum produto para enviar"
         })
 
 @app.route('/api/validar-lista', methods=['POST'])
@@ -511,50 +611,41 @@ def api_validar_lista():
             "message": "Erro ao validar lista"
         })
 
-@app.route('/api/pesquisar', methods=['GET'])
-def api_pesquisar():
-    if 'usuario_id' not in session or not session.get('admin'):
-        return jsonify({"success": False, "message": "Não autorizado"})
+@app.route('/api/export')
+def api_export():
+    if 'usuario_id' not in session:
+        return jsonify({"success": False, "message": "Não autenticado"})
     
-    termo = request.args.get('termo')
-    if not termo:
-        return jsonify({"success": False, "message": "Termo de pesquisa não fornecido"})
+    usuario_id = session['usuario_id']
     
-    resultados = pesquisar_produtos(termo)
-    return jsonify({
-        "success": True,
-        "resultados": resultados
-    })
-
-@app.route('/api/exportar-excel', methods=['POST'])
-def api_exportar_excel():
-    if 'usuario_id' not in session or not session.get('admin'):
-        return jsonify({"success": False, "message": "Não autorizado"}, 403)
+    # Buscar produtos não enviados do usuário
+    produtos = Produto.query.filter_by(
+        usuario_id=usuario_id,
+        enviado=0  # Usar 0 em vez de false
+    ).all()
     
-    dados = request.json
-    if not dados or 'produtos' not in dados:
-        return jsonify({"success": False, "message": "Dados incompletos"}, 400)
+    # Converter para DataFrame
+    data = []
+    for produto in produtos:
+        data.append({
+            'EAN': produto.ean,
+            'Nome': produto.nome,
+            'Cor': produto.cor,
+            'Voltagem': produto.voltagem,
+            'Modelo': produto.modelo,
+            'Quantidade': produto.quantidade
+        })
     
-    produtos = dados['produtos']
-    
-    # Criar DataFrame
-    df = pd.DataFrame([
-        {
-            'EAN': p['ean'],
-            'DESCRIÇÃO': p['nome'],
-            'QUANTIDADE': p['quantidade']
-        }
-        for p in produtos
-    ])
+    df = pd.DataFrame(data)
     
     # Criar arquivo Excel em memória
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False)
+        df.to_excel(writer, index=False, sheet_name='Produtos')
     
     output.seek(0)
     
-    # Gerar nome do arquivo
+    # Gerar nome do arquivo com timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"produtos_{timestamp}.xlsx"
     
@@ -564,6 +655,16 @@ def api_exportar_excel():
         download_name=filename,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
+
+@app.route('/ml-callback')
+def ml_callback():
+    code = request.args.get('code')
+    if code:
+        # Salvar o código de autorização
+        os.environ['ML_AUTH_CODE'] = code
+        return "Autorização concedida com sucesso! Você pode fechar esta janela."
+    else:
+        return "Erro ao obter código de autorização."
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0')
