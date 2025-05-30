@@ -52,6 +52,16 @@
         .table th {
             background-color: #f8f9fa;
         }
+        /* Estilo para o modal de confirmação */
+        .modal-header {
+            background-color: #007bff;
+            color: white;
+        }
+        .pin-input {
+            letter-spacing: 0.5em;
+            text-align: center;
+            font-size: 1.5em;
+        }
     </style>
 </head>
 <body>
@@ -113,6 +123,9 @@
                                                 <td>
                                                     {% if produto.validado %}
                                                         <span class="badge bg-success">Validado por {{ produto.nome_validador }}</span>
+                                                        {% if produto.responsavel_pin %}
+                                                        <br><small>Responsável: {{ produto.responsavel_pin }}</small>
+                                                        {% endif %}
                                                     {% else %}
                                                         <span class="badge bg-warning text-dark">Pendente</span>
                                                     {% endif %}
@@ -141,41 +154,122 @@
         </div>
     </div>
     
+    <!-- Modal de Confirmação com PIN -->
+    <div class="modal fade" id="modalConfirmacao" tabindex="-1" aria-labelledby="modalConfirmacaoLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalConfirmacaoLabel">Confirmação de Envio</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Para confirmar o envio da lista, informe a senha PIN do responsável.</p>
+                    <form id="formConfirmacao">
+                        <div class="mb-3">
+                            <label for="responsavelSelect" class="form-label">Responsável*</label>
+                            <select class="form-select" id="responsavelSelect" required>
+                                <option value="" selected disabled>Selecione o responsável</option>
+                                <option value="Liliane">Liliane</option>
+                                <option value="Rogerio">Rogerio</option>
+                                <option value="Celso">Celso</option>
+                                <option value="Marcos">Marcos</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="pinInput" class="form-label">Senha PIN (4 dígitos)*</label>
+                            <input type="password" class="form-control pin-input" id="pinInput" maxlength="4" pattern="[0-9]{4}" required>
+                            <div class="invalid-feedback">
+                                Senha PIN inválida. Por favor, verifique.
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" id="btnConfirmarEnvio">Confirmar Envio</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+            // Mapeamento de responsáveis e suas senhas PIN
+            const pinResponsaveis = {
+                'Liliane': '5584',
+                'Rogerio': '9841',
+                'Celso': '2122',
+                'Marcos': '6231'
+            };
+            
+            // Variáveis para armazenar dados da lista atual
+            let nomeUsuarioAtual = '';
+            let dataEnvioAtual = '';
+            
+            // Modal de confirmação
+            const modalConfirmacao = new bootstrap.Modal(document.getElementById('modalConfirmacao'));
+            
             // Adicionar evento de clique aos botões de validação
             const botoesValidar = document.querySelectorAll('.validar-lista');
             botoesValidar.forEach(botao => {
                 botao.addEventListener('click', function() {
-                    const nomeUsuario = this.getAttribute('data-nome-usuario');
-                    const dataEnvio = this.getAttribute('data-data-envio');
+                    nomeUsuarioAtual = this.getAttribute('data-nome-usuario');
+                    dataEnvioAtual = this.getAttribute('data-data-envio');
                     
-                    // Enviar requisição para validar a lista
-                    fetch('/api/validar-lista', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            nome_usuario: nomeUsuario,
-                            data_envio: dataEnvio
-                        })
+                    // Limpar campos do formulário
+                    document.getElementById('responsavelSelect').value = '';
+                    document.getElementById('pinInput').value = '';
+                    document.getElementById('pinInput').classList.remove('is-invalid');
+                    
+                    // Exibir o modal
+                    modalConfirmacao.show();
+                });
+            });
+            
+            // Evento de clique no botão de confirmar envio
+            document.getElementById('btnConfirmarEnvio').addEventListener('click', function() {
+                const responsavel = document.getElementById('responsavelSelect').value;
+                const pin = document.getElementById('pinInput').value;
+                
+                // Validar se os campos foram preenchidos
+                if (!responsavel || !pin) {
+                    alert('Por favor, preencha todos os campos obrigatórios.');
+                    return;
+                }
+                
+                // Validar o PIN
+                if (pinResponsaveis[responsavel] !== pin) {
+                    document.getElementById('pinInput').classList.add('is-invalid');
+                    return;
+                }
+                
+                // Enviar requisição para validar a lista
+                fetch('/api/validar-lista', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        nome_usuario: nomeUsuarioAtual,
+                        data_envio: dataEnvioAtual,
+                        responsavel_pin: responsavel
                     })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            alert('Lista validada com sucesso!');
-                            // Recarregar a página para atualizar o status
-                            window.location.reload();
-                        } else {
-                            alert('Erro ao validar lista: ' + data.message);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Erro:', error);
-                        alert('Erro ao validar lista. Verifique o console para mais detalhes.');
-                    });
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        modalConfirmacao.hide();
+                        alert('Lista validada com sucesso!');
+                        // Recarregar a página para atualizar o status
+                        window.location.reload();
+                    } else {
+                        alert('Erro ao validar lista: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Erro:', error);
+                    alert('Erro ao validar lista. Verifique o console para mais detalhes.');
                 });
             });
         });
