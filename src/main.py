@@ -36,6 +36,16 @@ with app.app_context():
         db.session.add(admin)
         db.session.commit()
         logger.info("Usuário admin criado com sucesso")
+    
+    # Verificar se existe o usuário teste
+    teste = Usuario.query.filter_by(nome='teste').first()
+    if not teste:
+        # Criar usuário teste
+        hashed_password = generate_password_hash('123')
+        teste = Usuario(nome='teste', senha_hash=hashed_password, admin=0)
+        db.session.add(teste)
+        db.session.commit()
+        logger.info("Usuário teste criado com sucesso")
 
 # Rota raiz - redireciona para login
 @app.route('/')
@@ -81,25 +91,24 @@ def registro():
     error = None
     if request.method == 'POST':
         username = request.form['username']
-        email = request.form['email']
         password = request.form['password']
         confirm_password = request.form['confirm_password']
         
         # Validar se as senhas coincidem
         if password != confirm_password:
             error = "As senhas não coincidem"
-            return render_template('registro.html', error=error)
+            return render_template('registro_simples.html', error=error)
         
         # Verificar se o usuário já existe
         usuario_existente = Usuario.query.filter_by(nome=username).first()
         if usuario_existente:
             error = "Nome de usuário já está em uso"
-            return render_template('registro.html', error=error)
+            return render_template('registro_simples.html', error=error)
         
         # Criar novo usuário (não admin por padrão)
         try:
             hashed_password = generate_password_hash(password)
-            novo_usuario = Usuario(nome=username, email=email, senha_hash=hashed_password, admin=0)
+            novo_usuario = Usuario(nome=username, senha_hash=hashed_password, admin=0)
             db.session.add(novo_usuario)
             db.session.commit()
             
@@ -116,7 +125,7 @@ def registro():
             error = f"Erro ao registrar usuário: {str(e)}"
             logger.error(f"Erro ao registrar usuário {username}: {str(e)}")
     
-    return render_template('registro.html', error=error)
+    return render_template('registro_simples.html', error=error)
 
 # Rota de logout
 @app.route('/logout')
@@ -130,7 +139,10 @@ def index_usuario():
     if 'usuario_id' not in session:
         return redirect(url_for('login'))
     
-    return render_template('index.html', nome_usuario=session.get('nome_usuario'))
+    # Garantir que produtos seja sempre uma lista, mesmo que vazia
+    produtos = []
+    
+    return render_template('index.html', nome_usuario=session.get('nome_usuario'), produtos=produtos)
 
 # Página de administração
 @app.route('/admin')
@@ -141,9 +153,34 @@ def admin():
     # Buscar listas de produtos enviadas
     listas_por_usuario = {}
     
-    # Lógica para buscar as listas de produtos
-    # Esta parte depende da estrutura específica do seu banco de dados
-    # e de como as listas são organizadas
+    try:
+        # Buscar produtos enviados agrupados por usuário e data de envio
+        produtos_enviados = Produto.query.filter_by(enviado=1).all()
+        
+        # Agrupar produtos por usuário e data de envio
+        for produto in produtos_enviados:
+            usuario = Usuario.query.get(produto.usuario_id)
+            if not usuario:
+                continue
+                
+            nome_usuario = usuario.nome
+            data_envio = produto.data_envio
+            
+            # Adicionar validador se existir
+            if produto.validado and produto.validador_id:
+                validador = Usuario.query.get(produto.validador_id)
+                produto.nome_validador = validador.nome if validador else "Desconhecido"
+            
+            # Criar chave para o dicionário
+            chave = (nome_usuario, data_envio)
+            
+            if chave not in listas_por_usuario:
+                listas_por_usuario[chave] = []
+                
+            listas_por_usuario[chave].append(produto)
+    
+    except Exception as e:
+        logger.error(f"Erro ao buscar listas de produtos: {str(e)}")
     
     return render_template('admin.html', nome_usuario=session.get('nome_usuario'), listas_por_usuario=listas_por_usuario)
 
