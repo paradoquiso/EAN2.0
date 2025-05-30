@@ -40,6 +40,10 @@
             margin-bottom: 15px;
             text-align: center;
         }
+        .register-link {
+            text-align: center;
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
@@ -68,8 +72,9 @@
                 <button type="submit" class="btn btn-primary btn-login">Entrar</button>
             </form>
             
-            <!-- Removido o link para registro que estava causando o erro -->
-            
+            <div class="register-link">
+                <p>Não tem uma conta? <a href="{{ url_for('registro') }}">Registre-se</a></p>
+            </div>
         </div>
     </div>
     
