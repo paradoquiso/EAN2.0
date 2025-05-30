@@ -169,7 +169,7 @@
         </div>
     </div>
     
-    <!-- Modal de Confirmação com Senha PI -->
+    <!-- Modal de Confirmação com Senha PI - Versão Segura -->
     <div class="modal fade" id="confirmacaoModal" tabindex="-1" aria-labelledby="confirmacaoModalLabel" aria-hidden="true">
         <div class="modal-dialog">
             <div class="modal-content">
@@ -178,16 +178,22 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
                 </div>
                 <div class="modal-body">
-                    <p>Para confirmar o envio da lista, informe a senha PI do responsável:</p>
+                    <p>Para confirmar o envio da lista, informe a senha PIN do responsável:</p>
+                    <div class="form-group mb-3">
+                        <label for="responsavelSelect">Responsável*</label>
+                        <select class="form-control" id="responsavelSelect" required>
+                            <option value="">Selecione o responsável</option>
+                            <option value="Liliane">Liliane</option>
+                            <option value="Rogerio">Rogerio</option>
+                            <option value="Celso">Celso</option>
+                            <option value="Marcos">Marcos</option>
+                        </select>
+                    </div>
                     <div class="form-group">
-                        <label for="senhaPi">Senha PI (4 dígitos)*</label>
+                        <label for="senhaPi">Senha PIN (4 dígitos)*</label>
                         <input type="password" class="form-control" id="senhaPi" maxlength="4" pattern="[0-9]{4}" required>
                         <small class="form-text text-muted">
-                            Senhas disponíveis:<br>
-                            5584 - Liliane<br>
-                            9841 - Rogerio<br>
-                            2122 - Celso<br>
-                            6231 - Marcos
+                            Digite a senha PIN de 4 dígitos do responsável selecionado.
                         </small>
                     </div>
                 </div>
@@ -211,6 +217,7 @@
             const confirmacaoModal = new bootstrap.Modal(document.getElementById('confirmacaoModal'));
             const confirmarEnvioBtn = document.getElementById('confirmarEnvioBtn');
             const senhaPiInput = document.getElementById('senhaPi');
+            const responsavelSelect = document.getElementById('responsavelSelect');
             
             // Função para mostrar mensagem de sucesso
             function mostrarMensagem(mensagem) {
@@ -370,71 +377,70 @@
                 });
             }
             
-            // Função para enviar lista de produtos
+            // Abrir modal de confirmação ao clicar em "Enviar Lista"
             enviarListaBtn.addEventListener('click', function() {
-                // Abrir modal de confirmação com senha PI
+                // Limpar campos do modal
+                senhaPiInput.value = '';
+                responsavelSelect.value = '';
+                
+                // Abrir modal
                 confirmacaoModal.show();
             });
             
-            // Função para confirmar envio com senha PI
+            // Enviar lista ao confirmar no modal
             confirmarEnvioBtn.addEventListener('click', function() {
                 const senhaPi = senhaPiInput.value.trim();
+                const responsavel = responsavelSelect.value.trim();
                 
-                if (!senhaPi || senhaPi.length !== 4 || !/^\d+$/.test(senhaPi)) {
-                    alert('Por favor, informe uma senha PI válida de 4 dígitos.');
+                if (!senhaPi) {
+                    alert('Por favor, informe a senha PIN.');
                     return;
                 }
                 
+                if (!responsavel) {
+                    alert('Por favor, selecione o responsável.');
+                    return;
+                }
+                
+                // Validar formato da senha (4 dígitos numéricos)
+                if (!/^\d{4}$/.test(senhaPi)) {
+                    alert('A senha PIN deve conter exatamente 4 dígitos numéricos.');
+                    return;
+                }
+                
+                // Enviar lista com senha PI e responsável
                 fetch('/api/enviar-lista', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        senha_pi: senhaPi
+                        senha_pi: senhaPi,
+                        responsavel: responsavel
                     })
                 })
                 .then(response => response.json())
                 .then(data => {
+                    // Fechar modal
                     confirmacaoModal.hide();
-                    senhaPiInput.value = '';
                     
                     if (data.success) {
                         mostrarMensagem(data.message);
                         
                         // Atualizar a lista de produtos (que agora deve estar vazia)
-                        fetch('/api/produtos')
-                            .then(response => response.json())
-                            .then(produtosData => {
-                                if (produtosData.success) {
-                                    updateProductList(produtosData.produtos);
-                                }
-                            })
-                            .catch(error => {
-                                console.error('Erro ao atualizar lista:', error);
-                            });
+                        updateProductList([]);
                     } else {
                         alert(data.message || 'Erro ao enviar lista.');
                     }
                 })
                 .catch(error => {
-                    confirmacaoModal.hide();
                     console.error('Erro:', error);
                     alert('Erro ao enviar lista. Verifique o console para mais detalhes.');
+                    
+                    // Fechar modal
+                    confirmacaoModal.hide();
                 });
             });
-            
-            // Inicializar a lista de produtos
-            fetch('/api/produtos')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        updateProductList(data.produtos);
-                    }
-                })
-                .catch(error => {
-                    console.error('Erro ao carregar produtos:', error);
-                });
         });
     </script>
 </body>
