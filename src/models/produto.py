@@ -23,6 +23,9 @@ class Produto(db.Model):
     validado = db.Column(db.Integer, default=0)
     data_validacao = db.Column(db.String(20))
     
+    # Novo campo para armazenar o responsável pela confirmação via PIN
+    responsavel_pin = db.Column(db.String(50))
+    
     def __repr__(self):
         return f'<Produto {self.ean}: {self.nome}>'
     
@@ -42,5 +45,6 @@ class Produto(db.Model):
             'data_envio': self.data_envio,
             'validado': self.validado,
             'validador_id': self.validador_id,
-            'data_validacao': self.data_validacao
+            'data_validacao': self.data_validacao,
+            'responsavel_pin': self.responsavel_pin
         }
