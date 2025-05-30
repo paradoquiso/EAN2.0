@@ -4,7 +4,7 @@ from datetime import datetime
 import logging
 import json
 import requests
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file, flash
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import pandas as pd
@@ -42,7 +42,7 @@ with app.app_context():
 def index():
     if 'usuario_id' in session:
         # Se já estiver logado, redireciona para a página principal
-        return redirect(url_for('admin' if session.get('admin') else 'produtos'))
+        return redirect(url_for('admin' if session.get('admin') else 'index_usuario'))
     # Se não estiver logado, redireciona para a página de login
     return redirect(url_for('login'))
 
@@ -68,18 +68,84 @@ def login():
             if usuario.admin:
                 return redirect(url_for('admin'))
             else:
-                return redirect(url_for('produtos'))
+                return redirect(url_for('index_usuario'))
         else:
             error = "Usuário ou senha inválidos"
             logger.warning(f"Tentativa de login falhou para o usuário {username}")
     
     return render_template('login.html', error=error)
 
+# Rota de registro de novos usuários
+@app.route('/registro', methods=['GET', 'POST'])
+def registro():
+    error = None
+    if request.method == 'POST':
+        username = request.form['username']
+        email = request.form['email']
+        password = request.form['password']
+        confirm_password = request.form['confirm_password']
+        
+        # Validar se as senhas coincidem
+        if password != confirm_password:
+            error = "As senhas não coincidem"
+            return render_template('registro.html', error=error)
+        
+        # Verificar se o usuário já existe
+        usuario_existente = Usuario.query.filter_by(nome=username).first()
+        if usuario_existente:
+            error = "Nome de usuário já está em uso"
+            return render_template('registro.html', error=error)
+        
+        # Criar novo usuário (não admin por padrão)
+        try:
+            hashed_password = generate_password_hash(password)
+            novo_usuario = Usuario(nome=username, email=email, senha_hash=hashed_password, admin=0)
+            db.session.add(novo_usuario)
+            db.session.commit()
+            
+            logger.info(f"Novo usuário {username} registrado com sucesso")
+            
+            # Fazer login automático após o registro
+            session['usuario_id'] = novo_usuario.id
+            session['nome_usuario'] = novo_usuario.nome
+            session['admin'] = novo_usuario.admin
+            
+            return redirect(url_for('index_usuario'))
+        except Exception as e:
+            db.session.rollback()
+            error = f"Erro ao registrar usuário: {str(e)}"
+            logger.error(f"Erro ao registrar usuário {username}: {str(e)}")
+    
+    return render_template('registro.html', error=error)
+
 # Rota de logout
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('login'))
+
+# Página inicial para usuários não-admin
+@app.route('/usuario')
+def index_usuario():
+    if 'usuario_id' not in session:
+        return redirect(url_for('login'))
+    
+    return render_template('index.html', nome_usuario=session.get('nome_usuario'))
+
+# Página de administração
+@app.route('/admin')
+def admin():
+    if 'usuario_id' not in session or not session.get('admin'):
+        return redirect(url_for('login'))
+    
+    # Buscar listas de produtos enviadas
+    listas_por_usuario = {}
+    
+    # Lógica para buscar as listas de produtos
+    # Esta parte depende da estrutura específica do seu banco de dados
+    # e de como as listas são organizadas
+    
+    return render_template('admin.html', nome_usuario=session.get('nome_usuario'), listas_por_usuario=listas_por_usuario)
 
 # Funções auxiliares
 def buscar_produto_local(ean, usuario_id):
@@ -171,8 +237,14 @@ def validar_lista(data_envio, nome_usuario, validador_id):
     """
     return validar_lista_com_responsavel(data_envio, nome_usuario, validador_id, "Não especificado")
 
-# Adicione aqui o restante do código da sua aplicação
-# ...
+# Tratamento de erros
+@app.errorhandler(404)
+def page_not_found(e):
+    return render_template('error.html', error="Página não encontrada"), 404
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    return render_template('error.html', error="Erro interno do servidor"), 500
 
 # Se este arquivo for executado diretamente
 if __name__ == '__main__':
