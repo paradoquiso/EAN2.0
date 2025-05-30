@@ -36,14 +36,57 @@ with app.app_context():
         db.session.add(admin)
         db.session.commit()
         logger.info("Usuário admin criado com sucesso")
+
+# Rota raiz - redireciona para login
+@app.route('/')
+def index():
+    if 'usuario_id' in session:
+        # Se já estiver logado, redireciona para a página principal
+        return redirect(url_for('admin' if session.get('admin') else 'produtos'))
+    # Se não estiver logado, redireciona para a página de login
+    return redirect(url_for('login'))
+
+# Rota de login
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        
+        usuario = Usuario.query.filter_by(nome=username).first()
+        
+        if usuario and check_password_hash(usuario.senha_hash, password):
+            # Login bem-sucedido
+            session['usuario_id'] = usuario.id
+            session['nome_usuario'] = usuario.nome
+            session['admin'] = usuario.admin
+            
+            logger.info(f"Usuário {username} logado com sucesso")
+            
+            # Redirecionar para a página apropriada
+            if usuario.admin:
+                return redirect(url_for('admin'))
+            else:
+                return redirect(url_for('produtos'))
+        else:
+            error = "Usuário ou senha inválidos"
+            logger.warning(f"Tentativa de login falhou para o usuário {username}")
+    
+    return render_template('login.html', error=error)
+
+# Rota de logout
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
 # Funções auxiliares
 def buscar_produto_local(ean, usuario_id):
     produto = Produto.query.filter_by(ean=ean, usuario_id=usuario_id).first()
     if produto:
         return produto.to_dict()
     return None
-
-# Restante do código...
 
 @app.route('/api/validar-lista', methods=['POST'])
 def api_validar_lista():
@@ -127,3 +170,10 @@ def validar_lista(data_envio, nome_usuario, validador_id):
     Função legada mantida para compatibilidade
     """
     return validar_lista_com_responsavel(data_envio, nome_usuario, validador_id, "Não especificado")
+
+# Adicione aqui o restante do código da sua aplicação
+# ...
+
+# Se este arquivo for executado diretamente
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0')
